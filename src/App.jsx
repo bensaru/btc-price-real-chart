@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { AreaSeries, BaselineSeries, ColorType, createChart } from "lightweight-charts";
+import { ColorType, LineSeries, createChart } from "lightweight-charts";
 
 const HISTORY_URL = "https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=60";
+const TICKER_REST_URL = "https://api.exchange.coinbase.com/products/BTC-USD/ticker";
 const WS_URL = "wss://ws-feed.exchange.coinbase.com";
 const BTC_CIRCULATING_SUPPLY = 19_650_000;
+const DOCUMENT_TITLE_BASE = "BTC Live Chart";
 
 function formatPrice(price) {
   return new Intl.NumberFormat("en-US", {
@@ -44,6 +46,17 @@ function formatDateOnly(unixSeconds) {
     day: "2-digit",
     year: "numeric"
   }).format(new Date(unixSeconds * 1000));
+}
+
+/** Price string for browser tab (2 decimal places). */
+function formatTitlePrice(price) {
+  if (!Number.isFinite(price)) return "—";
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(price);
 }
 
 export default function App() {
@@ -111,23 +124,21 @@ export default function App() {
       }
     });
 
-    const priceSeries = chart.addSeries(BaselineSeries, {
-      baseValue: { type: "price", price: 0 },
-      topLineColor: "#22c55e",
-      topFillColor1: "rgba(34, 197, 94, 0.35)",
-      topFillColor2: "rgba(34, 197, 94, 0.05)",
-      bottomLineColor: "#ef4444",
-      bottomFillColor1: "rgba(239, 68, 68, 0.28)",
-      bottomFillColor2: "rgba(239, 68, 68, 0.04)",
-      lineWidth: 2
+    const priceSeries = chart.addSeries(LineSeries, {
+      color: "#22c55e",
+      lineWidth: 2,
+      crosshairMarkerVisible: true,
+      lastValueVisible: true,
+      priceLineVisible: true
     });
 
-    const marketCapSeries = chart.addSeries(AreaSeries, {
-      topColor: "rgba(34, 197, 94, 0.35)",
-      bottomColor: "rgba(34, 197, 94, 0.03)",
-      lineColor: "#22c55e",
+    const marketCapSeries = chart.addSeries(LineSeries, {
+      color: "#a78bfa",
       lineWidth: 2,
       visible: false,
+      crosshairMarkerVisible: true,
+      lastValueVisible: true,
+      priceLineVisible: true,
       priceFormat: {
         type: "custom",
         formatter: (v) => formatMarketCap(v)
@@ -152,6 +163,35 @@ export default function App() {
     });
 
     let tickInterval = null;
+    let pollInFlight = false;
+
+    function applyLivePrice(price, unixSeconds) {
+      if (!Number.isFinite(price) || !Number.isFinite(unixSeconds)) return;
+      latestTickRef.current = { price, time: unixSeconds };
+
+      const bucket = Math.floor(unixSeconds / 60) * 60;
+      const current = currentPointRef.current;
+      if (!current || current.time < bucket) {
+        currentPointRef.current = { time: bucket, value: price };
+      } else {
+        current.value = price;
+      }
+
+      if (priceSeriesRef.current) {
+        priceSeriesRef.current.update(currentPointRef.current);
+      }
+      if (marketCapSeriesRef.current) {
+        marketCapSeriesRef.current.update({
+          time: currentPointRef.current.time,
+          value: price * BTC_CIRCULATING_SUPPLY
+        });
+      }
+
+      setLatestPrice(formatPrice(price));
+      setLatestMarketCap(formatMarketCap(price * BTC_CIRCULATING_SUPPLY));
+      setLastUpdate(formatTime(unixSeconds));
+      document.title = `${formatTitlePrice(price)} · ${DOCUMENT_TITLE_BASE}`;
+    }
 
     async function loadInitialCandles() {
       setMessage("Loading recent BTC/USD candles...");
@@ -176,52 +216,41 @@ export default function App() {
           value: c.close * BTC_CIRCULATING_SUPPLY
         }))
       );
-      if (priceData.length > 0) {
-        priceSeries.applyOptions({
-          baseValue: { type: "price", price: priceData[0].value }
-        });
-      }
       chart.timeScale().fitContent();
 
       if (candles.length > 0) {
         const last = candles[candles.length - 1];
         currentPointRef.current = { time: last.time, value: last.close };
-        setLatestPrice(formatPrice(last.close));
-        setLatestMarketCap(formatMarketCap(last.close * BTC_CIRCULATING_SUPPLY));
-        setLastUpdate(formatTime(last.time));
+        applyLivePrice(last.close, last.time);
       }
 
       setMessage("History loaded. Connecting to live feed...");
     }
 
-    function handleTick() {
-      if (!latestTickRef.current || !priceSeriesRef.current) {
-        return;
+    /** Poll REST ticker every second — WS `ticker` can be sparse; this keeps UI + title in sync. */
+    async function pollTickerOnce() {
+      if (pollInFlight) return;
+      pollInFlight = true;
+      try {
+        const res = await fetch(TICKER_REST_URL);
+        if (!res.ok) return;
+        const data = await res.json();
+        const price = Number(data.price);
+        const vol = Number(data.volume);
+        const nowSec = Math.floor(Date.now() / 1000);
+        if (Number.isFinite(price)) {
+          applyLivePrice(price, nowSec);
+        }
+        if (Number.isFinite(vol) && vol > 0 && Number.isFinite(price)) {
+          const formattedVolume = formatLargeCurrency(vol * price);
+          latestVolume24hRef.current = formattedVolume;
+          setLatestVolume24h(formattedVolume);
+        }
+      } catch {
+        /* ignore transient network errors */
+      } finally {
+        pollInFlight = false;
       }
-
-      const { price, time } = latestTickRef.current;
-      const bucket = Math.floor(time / 60) * 60;
-      const current = currentPointRef.current;
-
-      if (!current || current.time < bucket) {
-        currentPointRef.current = {
-          time: bucket,
-          value: price
-        };
-      } else {
-        current.value = price;
-      }
-
-      priceSeriesRef.current.update(currentPointRef.current);
-      setLatestPrice(formatPrice(price));
-      if (marketCapSeriesRef.current) {
-        marketCapSeriesRef.current.update({
-          time: currentPointRef.current.time,
-          value: price * BTC_CIRCULATING_SUPPLY
-        });
-        setLatestMarketCap(formatMarketCap(price * BTC_CIRCULATING_SUPPLY));
-      }
-      setLastUpdate(formatTime(time));
     }
 
     function connectSocket() {
@@ -261,7 +290,7 @@ export default function App() {
           return;
         }
 
-        latestTickRef.current = { price, time };
+        applyLivePrice(price, time);
         if (Number.isFinite(volume24h) && volume24h > 0) {
           const formattedVolume = formatLargeCurrency(volume24h * price);
           latestVolume24hRef.current = formattedVolume;
@@ -288,7 +317,8 @@ export default function App() {
       try {
         await loadInitialCandles();
         connectSocket();
-        tickInterval = setInterval(handleTick, 1000);
+        await pollTickerOnce();
+        tickInterval = setInterval(pollTickerOnce, 1000);
       } catch (error) {
         setConnection("Failed");
         setConnectionClass("error");
@@ -344,6 +374,7 @@ export default function App() {
     chart.subscribeCrosshairMove(handleCrosshairMove);
 
     return () => {
+      document.title = DOCUMENT_TITLE_BASE;
       if (tickInterval) {
         clearInterval(tickInterval);
       }
@@ -384,7 +415,7 @@ export default function App() {
     <main className="container">
       <h1>BTC/USD Live Chart</h1>
       <p className="subtitle">
-        React + Vite + TradingView Lightweight Charts + Coinbase feed, updated every second.
+        React + Vite + Lightweight Charts. Price refreshes every second (Coinbase REST ticker); WebSocket updates apply immediately when they arrive.
       </p>
 
       <section className="status-row">

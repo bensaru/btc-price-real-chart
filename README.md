@@ -23,6 +23,6 @@ Vite prints the local URL in terminal (usually `http://localhost:5173`).
 
 ## Notes
 
-- Chart updates every second from live ticker data.
+- Chart and page title update every second via Coinbase REST ticker (WebSocket ticker can be sparse).
 - Candles are 1-minute OHLC bars.
 - No API key required for this demo.
