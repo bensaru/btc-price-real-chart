@@ -1,22 +1,28 @@
-# BTC Live Chart (1-second updates)
+# BTC Live Chart (React + Vite)
 
-This project shows a real-time BTC/USD chart using:
+This app shows a real-time BTC/USD chart using:
 
-- TradingView **Lightweight Charts** (free, open-source chart library)
-- Coinbase public REST + WebSocket feed (free market data endpoints)
+- React + Vite
+- TradingView `lightweight-charts` package
+- Coinbase public REST + WebSocket feed
 
-## Run
+## Run locally
 
 ```bash
+npm install
 npm start
 ```
 
-Then open:
+Vite prints the local URL in terminal (usually `http://localhost:5173`).
 
-- `http://localhost:3000`
+## Scripts
+
+- `npm start` or `npm run dev` - start development server
+- `npm run build` - create production build
+- `npm run preview` - preview built app
 
 ## Notes
 
-- The chart receives live tick data and updates once per second.
-- Candle interval is 1 minute (OHLC candles).
-- No API key is required for this demo.
+- Chart updates every second from live ticker data.
+- Candles are 1-minute OHLC bars.
+- No API key required for this demo.

@@ -3,36 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>BTC Live Chart (1s updates)</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <title>BTC Live Chart</title>
   </head>
   <body>
-    <main class="container">
-      <h1>BTC/USD Live Chart</h1>
-      <p class="subtitle">
-        TradingView Lightweight Charts + Coinbase feed, updated every second.
-      </p>
-
-      <section class="status-row">
-        <div class="status-card">
-          <span class="label">Connection</span>
-          <span id="connectionStatus" class="value warning">Connecting...</span>
-        </div>
-        <div class="status-card">
-          <span class="label">Latest Price</span>
-          <span id="latestPrice" class="value">$--</span>
-        </div>
-        <div class="status-card">
-          <span class="label">Last Update</span>
-          <span id="lastUpdate" class="value">--</span>
-        </div>
-      </section>
-
-      <div id="chart"></div>
-      <p id="message"></p>
-    </main>
-
-    <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
-    <script src="./app.js?v=20260415-2"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
