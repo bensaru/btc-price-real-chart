@@ -1,10 +1,23 @@
 {
   "name": "btc-price-live-chart",
   "version": "1.0.0",
-  "description": "Live BTC price chart updating every second.",
-  "main": "server.js",
+  "description": "React app for live BTC price chart updating every second.",
+  "private": true,
+  "type": "module",
   "scripts": {
-    "start": "node server.js"
+    "start": "vite",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "lightweight-charts": "^5.0.9",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.0.4",
+    "vite": "^7.1.10"
+  }
 }
