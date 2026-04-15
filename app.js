@@ -4,11 +4,26 @@ const lastUpdateEl = document.getElementById("lastUpdate");
 const messageEl = document.getElementById("message");
 const chartEl = document.getElementById("chart");
 
+const backgroundColor = "#0b1220";
+const layoutOptions = {
+  textColor: "#e2e8f0",
+  background: { color: backgroundColor }
+};
+
+if (LightweightCharts.ColorType && LightweightCharts.ColorType.Solid) {
+  layoutOptions.background = {
+    type: LightweightCharts.ColorType.Solid,
+    color: backgroundColor
+  };
+}
+
+const crosshairMode =
+  LightweightCharts.CrosshairMode && LightweightCharts.CrosshairMode.Normal !== undefined
+    ? LightweightCharts.CrosshairMode.Normal
+    : 0;
+
 const chart = LightweightCharts.createChart(chartEl, {
-  layout: {
-    background: { color: "#0b1220" },
-    textColor: "#e2e8f0"
-  },
+  layout: layoutOptions,
   grid: {
     vertLines: { color: "#1f2937" },
     horzLines: { color: "#1f2937" }
@@ -22,17 +37,29 @@ const chart = LightweightCharts.createChart(chartEl, {
     borderColor: "#334155"
   },
   crosshair: {
-    mode: LightweightCharts.CrosshairMode.Normal
+    mode: crosshairMode
   }
 });
 
-const candleSeries = chart.addCandlestickSeries({
+const seriesOptions = {
   upColor: "#22c55e",
   downColor: "#ef4444",
   wickUpColor: "#22c55e",
   wickDownColor: "#ef4444",
   borderVisible: false
-});
+};
+
+let candleSeries;
+if (typeof chart.addCandlestickSeries === "function") {
+  candleSeries = chart.addCandlestickSeries(seriesOptions);
+} else if (
+  typeof chart.addSeries === "function" &&
+  LightweightCharts.CandlestickSeries !== undefined
+) {
+  candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, seriesOptions);
+} else {
+  throw new Error("Unsupported Lightweight Charts build loaded in browser.");
+}
 
 window.addEventListener("resize", () => {
   chart.applyOptions({ width: chartEl.clientWidth, height: chartEl.clientHeight });

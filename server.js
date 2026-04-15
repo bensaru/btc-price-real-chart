@@ -2,7 +2,7 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 
-const PORT = process.env.PORT || 3000;
+const DEFAULT_PORT = Number(process.env.PORT || 3000);
 const HOST = "0.0.0.0";
 
 const MIME_TYPES = {
@@ -42,6 +42,36 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.listen(PORT, HOST, () => {
-  console.log(`BTC chart app running at http://localhost:${PORT}`);
-});
+function listenWithFallback(startPort, maxAttempts = 20) {
+  let attempt = 0;
+  let currentPort = startPort;
+  let started = false;
+
+  const tryListen = () => {
+    server.listen(currentPort, HOST, () => {
+      if (started) {
+        return;
+      }
+      started = true;
+      console.log(`BTC chart app running at http://localhost:${currentPort}`);
+    });
+  };
+
+  server.on("error", (error) => {
+    if (error.code === "EADDRINUSE" && attempt < maxAttempts) {
+      attempt += 1;
+      currentPort += 1;
+      console.warn(`Port in use. Trying http://localhost:${currentPort} ...`);
+      server.close(() => {
+        tryListen();
+      });
+      return;
+    }
+
+    throw error;
+  });
+
+  tryListen();
+}
+
+listenWithFallback(DEFAULT_PORT);
