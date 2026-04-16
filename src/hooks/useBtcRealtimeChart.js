@@ -739,7 +739,16 @@ export function useBtcRealtimeChart() {
       targetPriceRef.current = boundaryPrice;
       setTargetPrice(formatPrice(boundaryPrice));
       setTargetTime(formatTime(boundaryTime));
-      refreshPredictionSignal(latestTickRef.current?.price, latestTickRef.current?.time ?? tickTime);
+      setPredictionSignal(
+        buildPredictionSignal({
+          points: pricePointsRef.current,
+          currentPrice: latestTickRef.current?.price,
+          nowUnixSeconds: latestTickRef.current?.time ?? tickTime,
+          intervalSeconds: visibleWindowSeconds,
+          targetPrice: boundaryPrice,
+          targetBoundaryTime: boundaryTime
+        })
+      );
       if (targetPriceLineRef.current) {
         targetPriceLineRef.current.applyOptions({ price: boundaryPrice });
       } else if (priceSeriesRef.current) {

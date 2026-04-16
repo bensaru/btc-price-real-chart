@@ -62,8 +62,6 @@ export default function App() {
         setChartEngine={setChartEngine}
       />
 
-      <HistoryResults items={historyResults} />
-
       <ChartViewport
         chartEngine={chartEngine}
         chartHostRef={chartHostRef}
@@ -71,6 +69,7 @@ export default function App() {
         tooltip={tooltip}
         tradingViewSrc={tradingViewSrc}
       />
+      <HistoryResults items={historyResults} />
       <p id="message">{message}</p>
     </main>
   );
