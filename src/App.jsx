@@ -1,63 +1,25 @@
 import { useEffect, useRef, useState } from "react";
 import { ColorType, LineSeries, createChart } from "lightweight-charts";
-
-const HISTORY_URL = "https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=60";
-const TICKER_REST_URL = "https://api.exchange.coinbase.com/products/BTC-USD/ticker";
-const WS_URL = "wss://ws-feed.exchange.coinbase.com";
-const BTC_CIRCULATING_SUPPLY = 19_650_000;
-const DOCUMENT_TITLE_BASE = "BTC Live Chart";
-
-function formatPrice(price) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 2
-  }).format(price);
-}
-
-function formatTime(unixSeconds) {
-  return new Intl.DateTimeFormat("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit"
-  }).format(new Date(unixSeconds * 1000));
-}
-
-function formatMarketCap(value) {
-  if (!Number.isFinite(value)) return "$--";
-  const abs = Math.abs(value);
-  if (abs >= 1_000_000_000_000) return `$${(value / 1_000_000_000_000).toFixed(2)}T`;
-  if (abs >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(2)}B`;
-  if (abs >= 1_000_000) return `$${(value / 1_000_000).toFixed(2)}M`;
-  return formatPrice(value);
-}
-
-function formatLargeCurrency(value) {
-  if (!Number.isFinite(value)) return "$--";
-  const abs = Math.abs(value);
-  if (abs >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(2)}B`;
-  if (abs >= 1_000_000) return `$${(value / 1_000_000).toFixed(2)}M`;
-  return formatPrice(value);
-}
-
-function formatDateOnly(unixSeconds) {
-  return new Intl.DateTimeFormat("en-US", {
-    month: "2-digit",
-    day: "2-digit",
-    year: "numeric"
-  }).format(new Date(unixSeconds * 1000));
-}
-
-/** Price string for browser tab (2 decimal places). */
-function formatTitlePrice(price) {
-  if (!Number.isFinite(price)) return "—";
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  }).format(price);
-}
+import ChartControls from "./components/ChartControls";
+import ChartTooltip from "./components/ChartTooltip";
+import StatusRow from "./components/StatusRow";
+import {
+  BTC_CIRCULATING_SUPPLY,
+  DEFAULT_VISIBLE_WINDOW_SECONDS,
+  DOCUMENT_TITLE_BASE,
+  HISTORY_URL,
+  TICKER_REST_URL,
+  TIME_WINDOW_OPTIONS,
+  WS_URL
+} from "./constants/chartConfig";
+import {
+  formatDateOnly,
+  formatLargeCurrency,
+  formatMarketCap,
+  formatPrice,
+  formatTime,
+  formatTitlePrice
+} from "./utils/formatters";
 
 export default function App() {
   const chartContainerRef = useRef(null);
@@ -70,9 +32,11 @@ export default function App() {
   const currentPointRef = useRef(null);
   const reconnectTimerRef = useRef(null);
   const websocketRef = useRef(null);
+  const visibleWindowSecondsRef = useRef(DEFAULT_VISIBLE_WINDOW_SECONDS);
 
   const [chartEngine, setChartEngine] = useState("simple");
   const [metric, setMetric] = useState("price");
+  const [visibleWindowSeconds, setVisibleWindowSeconds] = useState(DEFAULT_VISIBLE_WINDOW_SECONDS);
   const [connection, setConnection] = useState("Connecting...");
   const [connectionClass, setConnectionClass] = useState("warning");
   const [latestPrice, setLatestPrice] = useState("$--");
@@ -113,7 +77,7 @@ export default function App() {
       timeScale: {
         borderColor: "#334155",
         timeVisible: true,
-        secondsVisible: false
+        secondsVisible: true
       },
       rightPriceScale: {
         borderColor: "#334155"
@@ -165,11 +129,27 @@ export default function App() {
     let tickInterval = null;
     let pollInFlight = false;
 
+    function setVisibleRangeSafely(toUnixSeconds) {
+      if (!Number.isFinite(toUnixSeconds)) return;
+      if (!currentPointRef.current) return;
+
+      const windowSeconds = visibleWindowSecondsRef.current;
+      try {
+        chart.timeScale().setVisibleRange({
+          from: toUnixSeconds - windowSeconds,
+          to: toUnixSeconds + 5
+        });
+      } catch {
+        // Lightweight Charts can throw while internal time scale is not ready.
+      }
+    }
+
     function applyLivePrice(price, unixSeconds) {
       if (!Number.isFinite(price) || !Number.isFinite(unixSeconds)) return;
       latestTickRef.current = { price, time: unixSeconds };
 
-      const bucket = Math.floor(unixSeconds / 60) * 60;
+      // Plot each second as its own point for continuous real-time updates.
+      const bucket = unixSeconds;
       const current = currentPointRef.current;
       if (!current || current.time < bucket) {
         currentPointRef.current = { time: bucket, value: price };
@@ -187,6 +167,8 @@ export default function App() {
         });
       }
 
+      setVisibleRangeSafely(unixSeconds);
+
       setLatestPrice(formatPrice(price));
       setLatestMarketCap(formatMarketCap(price * BTC_CIRCULATING_SUPPLY));
       setLastUpdate(formatTime(unixSeconds));
@@ -195,7 +177,7 @@ export default function App() {
 
     async function loadInitialCandles() {
       setMessage("Loading recent BTC/USD candles...");
-      const response = await fetch(HISTORY_URL);
+      const response = await fetch(`${HISTORY_URL}?granularity=60`);
       if (!response.ok) {
         throw new Error(`HTTP ${response.status} while loading candle history.`);
       }
@@ -211,17 +193,17 @@ export default function App() {
       const priceData = candles.map((c) => ({ time: c.time, value: c.close }));
       priceSeries.setData(priceData);
       marketCapSeries.setData(
-        candles.map((c) => ({
-          time: c.time,
-          value: c.close * BTC_CIRCULATING_SUPPLY
+        priceData.map((p) => ({
+          time: p.time,
+          value: p.value * BTC_CIRCULATING_SUPPLY
         }))
       );
       chart.timeScale().fitContent();
 
-      if (candles.length > 0) {
-        const last = candles[candles.length - 1];
-        currentPointRef.current = { time: last.time, value: last.close };
-        applyLivePrice(last.close, last.time);
+      if (priceData.length > 0) {
+        const last = priceData[priceData.length - 1];
+        currentPointRef.current = { time: last.time, value: last.value };
+        applyLivePrice(last.value, last.time);
       }
 
       setMessage("History loaded. Connecting to live feed...");
@@ -391,6 +373,24 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    visibleWindowSecondsRef.current = visibleWindowSeconds;
+
+    const chart = chartRef.current;
+    if (!chart) return;
+
+    const tickTime = latestTickRef.current?.time ?? Math.floor(Date.now() / 1000);
+    if (!currentPointRef.current) return;
+    try {
+      chart.timeScale().setVisibleRange({
+        from: tickTime - visibleWindowSeconds,
+        to: tickTime + 5
+      });
+    } catch {
+      // Ignore until chart has enough data loaded.
+    }
+  }, [visibleWindowSeconds]);
+
+  useEffect(() => {
     const price = priceSeriesRef.current;
     const marketCap = marketCapSeriesRef.current;
     if (!price || !marketCap) return;
@@ -415,99 +415,36 @@ export default function App() {
     <main className="container">
       <h1>BTC/USD Live Chart</h1>
       <p className="subtitle">
-        React + Vite + Lightweight Charts. Price refreshes every second (Coinbase REST ticker); WebSocket updates apply immediately when they arrive.
+        React + Vite + Lightweight Charts. Continuous real-time BTC updates via WebSocket, with
+        REST polling as a backup if a tick is delayed. Default timeline window is 5 minutes.
       </p>
 
-      <section className="status-row">
-        <div className="status-card">
-          <span className="label">Connection</span>
-          <span className={`value ${connectionClass}`}>{connection}</span>
-        </div>
-        <div className="status-card">
-          <span className="label">Latest Price</span>
-          <span className="value">{latestPrice}</span>
-        </div>
-        <div className="status-card">
-          <span className="label">Market Cap (Est.)</span>
-          <span className="value">{latestMarketCap}</span>
-        </div>
-        <div className="status-card">
-          <span className="label">Last Update</span>
-          <span className="value">{lastUpdate}</span>
-        </div>
-      </section>
+      <StatusRow
+        connection={connection}
+        connectionClass={connectionClass}
+        latestPrice={latestPrice}
+        latestMarketCap={latestMarketCap}
+        lastUpdate={lastUpdate}
+      />
 
-      <section className="chart-controls">
-        <div className="toggle-group">
-          <button
-            type="button"
-            className={metric === "price" ? "toggle-btn active" : "toggle-btn"}
-            onClick={() => setMetric("price")}
-          >
-            Price
-          </button>
-          <button
-            type="button"
-            className={metric === "marketcap" ? "toggle-btn active" : "toggle-btn"}
-            onClick={() => setMetric("marketcap")}
-          >
-            Market cap
-          </button>
-        </div>
-        <div className="toggle-group">
-          <button
-            type="button"
-            className={chartEngine === "simple" ? "toggle-btn toggle-btn--icon active" : "toggle-btn toggle-btn--icon"}
-            onClick={() => setChartEngine("simple")}
-            title="Simple chart"
-            aria-label="Simple chart"
-          >
-            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-              <path
-                d="M4 18h16M6 15l4-4 3 2 5-6"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </button>
-          <button
-            type="button"
-            className={chartEngine === "tradingview" ? "toggle-btn active" : "toggle-btn"}
-            onClick={() => setChartEngine("tradingview")}
-          >
-            TradingView
-          </button>
-        </div>
-      </section>
+      <ChartControls
+        metric={metric}
+        setMetric={setMetric}
+        visibleWindowSeconds={visibleWindowSeconds}
+        setVisibleWindowSeconds={setVisibleWindowSeconds}
+        timeWindowOptions={TIME_WINDOW_OPTIONS}
+        chartEngine={chartEngine}
+        setChartEngine={setChartEngine}
+      />
 
       <div className="chart-host" ref={chartHostRef}>
         <div id="chart" ref={chartContainerRef} style={{ display: chartEngine === "simple" ? "block" : "none" }} />
-        {chartEngine === "simple" && tooltip.visible && (
-          <div className="chart-tooltip" style={{ left: tooltip.x, top: tooltip.y }}>
-            <div className="tooltip-head">
-              <span>{tooltip.date}</span>
-              <span>{tooltip.time}</span>
-            </div>
-            <div className="tooltip-row">
-              <span className="dot red" />
-              <span>{tooltip.primaryLabel}:</span>
-              <strong>{tooltip.primaryValue}</strong>
-            </div>
-            <div className="tooltip-row">
-              <span className="dot gray" />
-              <span>{tooltip.secondaryLabel}:</span>
-              <strong>{tooltip.secondaryValue}</strong>
-            </div>
-          </div>
-        )}
+        {chartEngine === "simple" && <ChartTooltip tooltip={tooltip} />}
         {chartEngine === "tradingview" && (
           <iframe
             title="TradingView BTCUSD Chart"
             className="tv-frame"
-            src="https://s.tradingview.com/widgetembed/?symbol=BITSTAMP%3ABTCUSD&interval=60&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=1f2937&studies=[]&theme=dark&style=1&timezone=Etc%2FUTC&withdateranges=1&hideideas=1&enable_publishing=0&allow_symbol_change=1"
+            src={`https://s.tradingview.com/widgetembed/?symbol=BITSTAMP%3ABTCUSD&interval=${TIME_WINDOW_OPTIONS.find((o) => o.value === visibleWindowSeconds)?.tvInterval ?? "5"}&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=1f2937&studies=[]&theme=dark&style=1&timezone=Etc%2FUTC&withdateranges=1&hideideas=1&enable_publishing=0&allow_symbol_change=1`}
           />
         )}
       </div>
