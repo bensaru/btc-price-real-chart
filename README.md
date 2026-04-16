@@ -1,28 +1,54 @@
-# BTC Live Chart (React + Vite)
+# BTC/USD Realtime Dashboard
 
-This app shows a real-time BTC/USD chart using:
+React + Vite app for live BTC/USD tracking with charting, interval target tracking, prediction, and recent interval results.
 
-- React + Vite
-- TradingView `lightweight-charts` package
-- Coinbase public REST + WebSocket feed
+## Features
 
-## Run locally
+- Realtime BTC/USD chart with Coinbase WebSocket ticker feed
+- 1-second backup polling from Coinbase REST ticker when socket ticks are delayed
+- Time window buttons: `5m`, `15m`, `1h`, `4h`, `1d`
+- Interval target logic:
+  - "Price To Beat" is the price at the start of the selected interval
+  - Dashed target price line on chart
+  - Red boundary markers at interval start points
+- Prediction panel for current interval close:
+  - `UP` / `DOWN` direction
+  - `UP %` and `DOWN %` probabilities
+  - expected close price and remaining seconds
+- Last 10 completed interval results table (`Start`, `Target`, `Close`, `Diff`, `Result`)
+- Browser title updates with current price and signed delta vs target
+- Optional chart engine toggle (Lightweight Charts / TradingView iframe)
+
+## Tech Stack
+
+- React 19
+- Vite 7
+- `lightweight-charts`
+- Coinbase public APIs (no API key required)
+
+## Run Locally
 
 ```bash
 npm install
 npm start
 ```
 
-Vite prints the local URL in terminal (usually `http://localhost:5173`).
+Vite prints the local URL in the terminal (for example `http://localhost:5173`, or the next available port).
 
-## Scripts
+## Available Scripts
 
-- `npm start` or `npm run dev` - start development server
-- `npm run build` - create production build
-- `npm run preview` - preview built app
+- `npm start` - start dev server
+- `npm run dev` - start dev server
+- `npm run build` - create production build in `dist`
+- `npm run preview` - preview production build
 
-## Notes
+## Project Structure
 
-- Chart and page title update every second via Coinbase REST ticker (WebSocket ticker can be sparse).
-- Candles are 1-minute OHLC bars.
-- No API key required for this demo.
+- `src/App.jsx` - top-level layout and component wiring
+- `src/hooks/useBtcRealtimeChart.js` - realtime data, chart state, target/prediction/history logic
+- `src/components/StatusRow.jsx` - status cards + prediction panel
+- `src/components/ChartControls.jsx` - metric/timescale/chart-engine controls
+- `src/components/ChartViewport.jsx` - chart container / TradingView iframe
+- `src/components/HistoryResults.jsx` - last 10 interval results table
+- `src/constants/chartConfig.js` - endpoints and timescale options
+- `src/utils/formatters.js` - formatting helpers
