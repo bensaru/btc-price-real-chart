@@ -1,4 +1,5 @@
 import ChartControls from "./components/ChartControls";
+import HistoryResults from "./components/HistoryResults";
 import ChartViewport from "./components/ChartViewport";
 import StatusRow from "./components/StatusRow";
 import {
@@ -24,7 +25,9 @@ export default function App() {
     latestMarketCap,
     lastUpdate,
     message,
-    tooltip
+    tooltip,
+    historyResults,
+    predictionSignal
   } = useBtcRealtimeChart();
 
   const tradingViewInterval = TIME_WINDOW_OPTIONS.find((o) => o.value === visibleWindowSeconds)?.tvInterval ?? "5";
@@ -46,6 +49,7 @@ export default function App() {
         targetTime={targetTime}
         latestMarketCap={latestMarketCap}
         lastUpdate={lastUpdate}
+        predictionSignal={predictionSignal}
       />
 
       <ChartControls
@@ -57,6 +61,8 @@ export default function App() {
         chartEngine={chartEngine}
         setChartEngine={setChartEngine}
       />
+
+      <HistoryResults items={historyResults} />
 
       <ChartViewport
         chartEngine={chartEngine}

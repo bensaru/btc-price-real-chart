@@ -5,8 +5,18 @@ export default function StatusRow({
   targetPrice,
   targetTime,
   latestMarketCap,
-  lastUpdate
+  lastUpdate,
+  predictionSignal
 }) {
+  const signal = predictionSignal ?? {
+    direction: "WAITING",
+    directionClass: "warning",
+    upProbability: "--",
+    downProbability: "--",
+    expectedClose: "$--",
+    remainingText: "--"
+  };
+
   const toNumber = (value) => {
     if (typeof value !== "string") return NaN;
     return Number(value.replace(/[^0-9.-]/g, ""));
@@ -50,6 +60,20 @@ export default function StatusRow({
             <span className="value">{latestPrice}</span>
             <span className={`label delta ${deltaClass}`}>{deltaText}</span>
           </div>
+        </div>
+      </div>
+      <div className="status-card status-card--prediction">
+        <div className="signal-wrap">
+          <span className="label">Prediction (interval close)</span>
+          <span className={`value value--signal ${signal.directionClass}`}>
+            {signal.direction}
+          </span>
+          <span className="label label--subtle">
+            UP: {signal.upProbability} | DOWN: {signal.downProbability}
+          </span>
+          <span className="label label--subtle">
+            Expected close: {signal.expectedClose} | Remaining: {signal.remainingText}
+          </span>
         </div>
       </div>
     </section>

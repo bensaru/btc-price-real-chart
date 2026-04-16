@@ -18,6 +18,113 @@ import {
 } from "../utils/formatters";
 
 const MAX_POINTS = 20_000;
+function clamp01(value) {
+  if (!Number.isFinite(value)) return 0.5;
+  if (value < 0) return 0;
+  if (value > 1) return 1;
+  return value;
+}
+
+function approxNormalCdf(z) {
+  return 1 / (1 + Math.exp(-1.702 * z));
+}
+
+function buildPredictionSignal({
+  points,
+  currentPrice,
+  nowUnixSeconds,
+  intervalSeconds,
+  targetPrice,
+  targetBoundaryTime
+}) {
+  if (
+    !Array.isArray(points) ||
+    points.length < 4 ||
+    !Number.isFinite(currentPrice) ||
+    !Number.isFinite(nowUnixSeconds) ||
+    !Number.isFinite(intervalSeconds) ||
+    !Number.isFinite(targetPrice) ||
+    !Number.isFinite(targetBoundaryTime)
+  ) {
+    return {
+      direction: "WAITING",
+      directionClass: "warning",
+      upProbability: "--",
+      downProbability: "--",
+      expectedClose: "$--",
+      remainingText: "--"
+    };
+  }
+
+  const boundaryEnd = targetBoundaryTime + intervalSeconds;
+  const remainingSeconds = Math.max(0, boundaryEnd - nowUnixSeconds);
+  if (remainingSeconds <= 0) {
+    const isUp = currentPrice >= targetPrice;
+    return {
+      direction: isUp ? "UP" : "DOWN",
+      directionClass: isUp ? "ok" : "error",
+      upProbability: isUp ? "100%" : "0%",
+      downProbability: isUp ? "0%" : "100%",
+      expectedClose: formatPrice(currentPrice),
+      remainingText: "0s"
+    };
+  }
+
+  const lookbackSeconds = Math.min(intervalSeconds, 15 * 60);
+  const lookbackStart = nowUnixSeconds - lookbackSeconds;
+  const recent = points.filter((p) => Number.isFinite(p.time) && p.time >= lookbackStart);
+  if (recent.length < 4) {
+    return {
+      direction: "WAITING",
+      directionClass: "warning",
+      upProbability: "--",
+      downProbability: "--",
+      expectedClose: "$--",
+      remainingText: `${remainingSeconds}s`
+    };
+  }
+
+  const first = recent[0];
+  const last = recent[recent.length - 1];
+  const elapsed = Math.max(1, last.time - first.time);
+  const driftPerSecond = (last.value - first.value) / elapsed;
+
+  const deltas = [];
+  for (let i = 1; i < recent.length; i += 1) {
+    const prev = recent[i - 1];
+    const curr = recent[i];
+    const dt = curr.time - prev.time;
+    if (!Number.isFinite(dt) || dt <= 0) continue;
+    const dp = curr.value - prev.value;
+    deltas.push(dp / dt);
+  }
+
+  const meanDelta = deltas.length > 0
+    ? deltas.reduce((sum, v) => sum + v, 0) / deltas.length
+    : driftPerSecond;
+  const variance = deltas.length > 1
+    ? deltas.reduce((sum, v) => sum + (v - meanDelta) ** 2, 0) / (deltas.length - 1)
+    : Math.max((Math.abs(meanDelta) * 0.1) ** 2, 1e-6);
+  const sigmaPerSecond = Math.sqrt(Math.max(variance, 1e-6));
+
+  const expectedCloseRaw = currentPrice + driftPerSecond * remainingSeconds;
+  const forecastSigma = Math.max(0.5, sigmaPerSecond * Math.sqrt(remainingSeconds));
+  const zScore = (expectedCloseRaw - targetPrice) / forecastSigma;
+  const upProb = clamp01(approxNormalCdf(zScore));
+  const downProb = 1 - upProb;
+
+  const direction = upProb >= downProb ? "UP" : "DOWN";
+  const directionClass = direction === "UP" ? "ok" : "error";
+
+  return {
+    direction,
+    directionClass,
+    upProbability: `${Math.round(upProb * 100)}%`,
+    downProbability: `${Math.round(downProb * 100)}%`,
+    expectedClose: formatPrice(expectedCloseRaw),
+    remainingText: `${remainingSeconds}s`
+  };
+}
 
 function buildBoundaryMarkers(points, intervalSeconds) {
   if (!Array.isArray(points) || points.length === 0 || !Number.isFinite(intervalSeconds)) {
@@ -56,6 +163,72 @@ function formatSignedDelta(currentPrice, targetPrice) {
   return `${sign}${formatTitlePrice(Math.abs(delta))}`;
 }
 
+function formatResultEntry(startTime, targetPrice, closePrice) {
+  const diff = closePrice - targetPrice;
+  const sign = diff >= 0 ? "+" : "-";
+  const absDiff = Math.abs(diff);
+  const resultText = diff > 0 ? "UP" : diff < 0 ? "DOWN" : "FLAT";
+  const deltaClass = diff > 0 ? "ok" : diff < 0 ? "error" : "";
+
+  return {
+    id: `${startTime}-${targetPrice}-${closePrice}`,
+    startTime: formatTime(startTime),
+    targetPrice: formatPrice(targetPrice),
+    closePrice: formatPrice(closePrice),
+    diffText: `${sign}${formatPrice(absDiff)}`,
+    deltaClass,
+    resultText
+  };
+}
+
+function buildHistoryFromPoints(points, intervalSeconds, limit = 10) {
+  if (!Array.isArray(points) || points.length === 0 || !Number.isFinite(intervalSeconds)) {
+    return [];
+  }
+
+  const buckets = [];
+  for (const p of points) {
+    if (!Number.isFinite(p.time) || !Number.isFinite(p.value)) {
+      continue;
+    }
+
+    const bucketStart = Math.floor(p.time / intervalSeconds) * intervalSeconds;
+    const lastBucket = buckets[buckets.length - 1];
+    if (!lastBucket || lastBucket.start !== bucketStart) {
+      buckets.push({
+        start: bucketStart,
+        startPrice: p.value,
+        closePrice: p.value,
+        lastTime: p.time
+      });
+    } else {
+      lastBucket.closePrice = p.value;
+      lastBucket.lastTime = p.time;
+    }
+  }
+
+  if (buckets.length === 0) {
+    return [];
+  }
+
+  const latestTime = points[points.length - 1]?.time;
+  const lastBucket = buckets[buckets.length - 1];
+  const isLastBucketComplete =
+    Number.isFinite(latestTime) &&
+    Number.isFinite(lastBucket?.start) &&
+    latestTime >= lastBucket.start + intervalSeconds;
+
+  const completedBuckets = isLastBucketComplete ? buckets : buckets.slice(0, -1);
+  if (completedBuckets.length === 0) {
+    return [];
+  }
+
+  const results = completedBuckets.map((bucket) =>
+    formatResultEntry(bucket.start, bucket.startPrice, bucket.closePrice)
+  );
+  return results.slice(-limit).reverse();
+}
+
 export function useBtcRealtimeChart() {
   const chartContainerRef = useRef(null);
   const chartHostRef = useRef(null);
@@ -73,6 +246,7 @@ export function useBtcRealtimeChart() {
   const visibleWindowSecondsRef = useRef(DEFAULT_VISIBLE_WINDOW_SECONDS);
   const targetBoundaryRef = useRef(null);
   const targetPriceRef = useRef(null);
+  const historyResultsRef = useRef([]);
   const metricRef = useRef("price");
 
   const [chartEngine, setChartEngine] = useState("simple");
@@ -85,6 +259,15 @@ export function useBtcRealtimeChart() {
   const [latestVolume24h, setLatestVolume24h] = useState("$--");
   const [targetPrice, setTargetPrice] = useState("$--");
   const [targetTime, setTargetTime] = useState("--");
+  const [historyResults, setHistoryResults] = useState([]);
+  const [predictionSignal, setPredictionSignal] = useState({
+    direction: "WAITING",
+    directionClass: "warning",
+    upProbability: "--",
+    downProbability: "--",
+    expectedClose: "$--",
+    remainingText: "--"
+  });
   const [lastUpdate, setLastUpdate] = useState("--");
   const [message, setMessage] = useState("Initializing chart...");
   const [tooltip, setTooltip] = useState({
@@ -173,6 +356,19 @@ export function useBtcRealtimeChart() {
     let tickInterval = null;
     let pollInFlight = false;
 
+    function refreshPredictionSignal(currentPrice, nowUnixSeconds) {
+      setPredictionSignal(
+        buildPredictionSignal({
+          points: pricePointsRef.current,
+          currentPrice,
+          nowUnixSeconds,
+          intervalSeconds: visibleWindowSecondsRef.current,
+          targetPrice: targetPriceRef.current,
+          targetBoundaryTime: targetBoundaryRef.current
+        })
+      );
+    }
+
     function updateTargetPrice(nowUnixSeconds) {
       if (!Number.isFinite(nowUnixSeconds)) return;
       const intervalSeconds = visibleWindowSecondsRef.current;
@@ -184,10 +380,26 @@ export function useBtcRealtimeChart() {
       const changedPrice = targetPriceRef.current !== boundaryPrice;
       if (!changedBoundary && !changedPrice) return;
 
+      if (
+        changedBoundary &&
+        Number.isFinite(targetBoundaryRef.current) &&
+        Number.isFinite(targetPriceRef.current)
+      ) {
+        const next = [
+          formatResultEntry(targetBoundaryRef.current, targetPriceRef.current, boundaryPrice),
+          ...historyResultsRef.current
+        ].slice(0, 10);
+        historyResultsRef.current = next;
+        setHistoryResults(next);
+      }
+
       targetBoundaryRef.current = boundaryTime;
       targetPriceRef.current = boundaryPrice;
       setTargetPrice(formatPrice(boundaryPrice));
       setTargetTime(formatTime(boundaryTime));
+      const latestLivePrice = latestTickRef.current?.price;
+      const latestLiveTime = latestTickRef.current?.time ?? nowUnixSeconds;
+      refreshPredictionSignal(latestLivePrice, latestLiveTime);
 
       if (!priceSeriesRef.current) return;
 
@@ -269,6 +481,7 @@ export function useBtcRealtimeChart() {
       setLatestPrice(formatPrice(price));
       setLatestMarketCap(formatMarketCap(price * BTC_CIRCULATING_SUPPLY));
       setLastUpdate(formatTime(unixSeconds));
+      refreshPredictionSignal(price, unixSeconds);
       const deltaText = formatSignedDelta(price, targetPriceRef.current);
       document.title = deltaText
         ? `${formatTitlePrice(price)} ${deltaText} · ${DOCUMENT_TITLE_BASE}`
@@ -319,6 +532,14 @@ export function useBtcRealtimeChart() {
       if (Number.isFinite(lastTime)) {
         updateTargetPrice(lastTime);
       }
+
+      const initialHistory = buildHistoryFromPoints(
+        pricePointsRef.current,
+        visibleWindowSecondsRef.current,
+        10
+      );
+      historyResultsRef.current = initialHistory;
+      setHistoryResults(initialHistory);
     }
 
     async function pollTickerOnce() {
@@ -518,6 +739,7 @@ export function useBtcRealtimeChart() {
       targetPriceRef.current = boundaryPrice;
       setTargetPrice(formatPrice(boundaryPrice));
       setTargetTime(formatTime(boundaryTime));
+      refreshPredictionSignal(latestTickRef.current?.price, latestTickRef.current?.time ?? tickTime);
       if (targetPriceLineRef.current) {
         targetPriceLineRef.current.applyOptions({ price: boundaryPrice });
       } else if (priceSeriesRef.current) {
@@ -531,6 +753,10 @@ export function useBtcRealtimeChart() {
         });
       }
     }
+
+    const rebuiltHistory = buildHistoryFromPoints(pricePointsRef.current, visibleWindowSeconds, 10);
+    historyResultsRef.current = rebuiltHistory;
+    setHistoryResults(rebuiltHistory);
   }, [visibleWindowSeconds]);
 
   useEffect(() => {
@@ -572,6 +798,8 @@ export function useBtcRealtimeChart() {
     latestMarketCap,
     lastUpdate,
     message,
-    tooltip
+    tooltip,
+    historyResults,
+    predictionSignal
   };
 }

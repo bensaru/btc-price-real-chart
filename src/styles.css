@@ -52,6 +52,10 @@ h1 {
   grid-column: span 2;
 }
 
+.status-card--prediction {
+  min-width: 240px;
+}
+
 .beat-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -67,6 +71,16 @@ h1 {
 .delta {
   margin-top: 2px;
   display: inline-block;
+}
+
+.signal-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.value--signal {
+  font-size: 16px;
 }
 
 @media (max-width: 860px) {
@@ -179,6 +193,52 @@ h1 {
 .chart-host {
   width: 100%;
   position: relative;
+}
+
+.history-panel {
+  margin: 12px 0 14px;
+  padding: 12px;
+  border-radius: 10px;
+  background: #111827;
+  border: 1px solid #334155;
+}
+
+.history-panel h2 {
+  margin: 0 0 10px;
+  font-size: 16px;
+  color: #e2e8f0;
+}
+
+.history-empty {
+  margin: 0;
+  color: #94a3b8;
+}
+
+.history-table-wrap {
+  overflow-x: auto;
+}
+
+.history-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 640px;
+}
+
+.history-table th,
+.history-table td {
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 13px;
+  border-bottom: 1px solid #1f2937;
+  white-space: nowrap;
+}
+
+.history-table th {
+  color: #94a3b8;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 11px;
 }
 
 .tv-frame {
