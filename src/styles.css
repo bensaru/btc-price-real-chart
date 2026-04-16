@@ -34,7 +34,7 @@ h1 {
 .status-row {
   margin: 18px 0;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 12px;
 }
 
@@ -48,16 +48,63 @@ h1 {
   gap: 4px;
 }
 
+.status-card--beat {
+  grid-column: span 2;
+}
+
+.beat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  align-items: end;
+}
+
+.beat-grid > div + div {
+  border-left: 1px solid #1f2937;
+  padding-left: 14px;
+}
+
+.delta {
+  margin-top: 2px;
+  display: inline-block;
+}
+
+@media (max-width: 860px) {
+  .status-card--beat {
+    grid-column: span 1;
+  }
+
+  .beat-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .beat-grid > div + div {
+    border-left: none;
+    border-top: 1px dashed #334155;
+    padding-left: 0;
+    padding-top: 10px;
+  }
+}
+
 .label {
   color: #94a3b8;
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+  display: block;
 }
 
 .value {
   font-size: 20px;
   font-weight: 600;
+  display: block;
+}
+
+.label--subtle {
+  text-transform: none;
+  letter-spacing: 0;
+  margin-top: 3px;
 }
 
 .ok {
