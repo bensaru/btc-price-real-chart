@@ -1,4 +1,4 @@
-export function formatPrice(price) {
+export function formatPrice(price: number): string {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
@@ -6,7 +6,7 @@ export function formatPrice(price) {
   }).format(price);
 }
 
-export function formatTime(unixSeconds) {
+export function formatTime(unixSeconds: number): string {
   return new Intl.DateTimeFormat("en-US", {
     hour: "2-digit",
     minute: "2-digit",
@@ -14,7 +14,7 @@ export function formatTime(unixSeconds) {
   }).format(new Date(unixSeconds * 1000));
 }
 
-export function formatMarketCap(value) {
+export function formatMarketCap(value: number): string {
   if (!Number.isFinite(value)) return "$--";
   const abs = Math.abs(value);
   if (abs >= 1_000_000_000_000) return `$${(value / 1_000_000_000_000).toFixed(2)}T`;
@@ -23,7 +23,7 @@ export function formatMarketCap(value) {
   return formatPrice(value);
 }
 
-export function formatLargeCurrency(value) {
+export function formatLargeCurrency(value: number): string {
   if (!Number.isFinite(value)) return "$--";
   const abs = Math.abs(value);
   if (abs >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(2)}B`;
@@ -31,7 +31,7 @@ export function formatLargeCurrency(value) {
   return formatPrice(value);
 }
 
-export function formatDateOnly(unixSeconds) {
+export function formatDateOnly(unixSeconds: number): string {
   return new Intl.DateTimeFormat("en-US", {
     month: "2-digit",
     day: "2-digit",
@@ -39,7 +39,7 @@ export function formatDateOnly(unixSeconds) {
   }).format(new Date(unixSeconds * 1000));
 }
 
-export function formatTitlePrice(price) {
+export function formatTitlePrice(price: number): string {
   if (!Number.isFinite(price)) return "—";
   return new Intl.NumberFormat("en-US", {
     style: "currency",

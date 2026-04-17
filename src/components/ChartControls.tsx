@@ -1,3 +1,18 @@
+import type { ChartEngine, Metric, TimeWindowOption } from "../types/chart";
+import type { Dispatch, SetStateAction } from "react";
+
+interface ChartControlsProps {
+  metric: Metric;
+  setMetric: Dispatch<SetStateAction<Metric>>;
+  visibleWindowSeconds: number;
+  setVisibleWindowSeconds: Dispatch<SetStateAction<number>>;
+  timeWindowOptions: TimeWindowOption[];
+  chartEngine: ChartEngine;
+  setChartEngine: Dispatch<SetStateAction<ChartEngine>>;
+  autoRefreshEnabled: boolean;
+  setAutoRefreshEnabled: Dispatch<SetStateAction<boolean>>;
+}
+
 export default function ChartControls({
   metric,
   setMetric,
@@ -8,7 +23,7 @@ export default function ChartControls({
   setChartEngine,
   autoRefreshEnabled,
   setAutoRefreshEnabled
-}) {
+}: ChartControlsProps) {
   return (
     <section className="chart-controls">
       <div className="toggle-group">

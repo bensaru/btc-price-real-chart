@@ -1,4 +1,10 @@
-export default function HistoryResults({ items }) {
+import type { HistoryResultItem } from "../types/chart";
+
+interface HistoryResultsProps {
+  items: HistoryResultItem[];
+}
+
+export default function HistoryResults({ items }: HistoryResultsProps) {
   return (
     <section className="history-panel">
       <h2>Last 10 Results</h2>

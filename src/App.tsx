@@ -3,9 +3,7 @@ import ChartControls from "./components/ChartControls";
 import HistoryResults from "./components/HistoryResults";
 import ChartViewport from "./components/ChartViewport";
 import StatusRow from "./components/StatusRow";
-import {
-  TIME_WINDOW_OPTIONS,
-} from "./constants/chartConfig";
+import { TIME_WINDOW_OPTIONS } from "./constants/chartConfig";
 import { useBtcRealtimeChart } from "./hooks/useBtcRealtimeChart";
 
 export default function App() {
@@ -33,7 +31,8 @@ export default function App() {
     predictionSignal
   } = useBtcRealtimeChart();
 
-  const tradingViewInterval = TIME_WINDOW_OPTIONS.find((o) => o.value === visibleWindowSeconds)?.tvInterval ?? "5";
+  const tradingViewInterval =
+    TIME_WINDOW_OPTIONS.find((o) => o.value === visibleWindowSeconds)?.tvInterval ?? "5";
   const tradingViewSrc = `https://s.tradingview.com/widgetembed/?symbol=BITSTAMP%3ABTCUSD&interval=${tradingViewInterval}&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=1f2937&studies=[]&theme=dark&style=1&timezone=Etc%2FUTC&withdateranges=1&hideideas=1&enable_publishing=0&allow_symbol_change=1`;
 
   useEffect(() => {

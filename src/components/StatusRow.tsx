@@ -1,3 +1,16 @@
+import type { PredictionSignal, StatusTone } from "../types/chart";
+
+interface StatusRowProps {
+  connection: string;
+  connectionClass: StatusTone;
+  latestPrice: string;
+  targetPrice: string;
+  targetTime: string;
+  latestMarketCap: string;
+  lastUpdate: string;
+  predictionSignal: PredictionSignal;
+}
+
 export default function StatusRow({
   connection,
   connectionClass,
@@ -7,7 +20,7 @@ export default function StatusRow({
   latestMarketCap,
   lastUpdate,
   predictionSignal
-}) {
+}: StatusRowProps) {
   const signal = predictionSignal ?? {
     direction: "WAITING",
     directionClass: "warning",
@@ -17,15 +30,12 @@ export default function StatusRow({
     remainingText: "--"
   };
 
-  const toNumber = (value) => {
-    if (typeof value !== "string") return NaN;
-    return Number(value.replace(/[^0-9.-]/g, ""));
-  };
+  const toNumber = (value: string) => Number(value.replace(/[^0-9.-]/g, ""));
 
   const current = toNumber(latestPrice);
   const target = toNumber(targetPrice);
   const diff = Number.isFinite(current) && Number.isFinite(target) ? current - target : NaN;
-  const deltaClass = !Number.isFinite(diff) ? "" : diff >= 0 ? "ok" : "error";
+  const deltaClass: StatusTone = !Number.isFinite(diff) ? "" : diff >= 0 ? "ok" : "error";
   const deltaArrow = !Number.isFinite(diff) ? "" : diff >= 0 ? "▲" : "▼";
   const deltaText = !Number.isFinite(diff)
     ? "--"
@@ -65,9 +75,7 @@ export default function StatusRow({
       <div className="status-card status-card--prediction">
         <div className="signal-wrap">
           <span className="label">Prediction (interval close)</span>
-          <span className={`value value--signal ${signal.directionClass}`}>
-            {signal.direction}
-          </span>
+          <span className={`value value--signal ${signal.directionClass}`}>{signal.direction}</span>
           <span className="label label--subtle">
             UP: {signal.upProbability} | DOWN: {signal.downProbability}
           </span>

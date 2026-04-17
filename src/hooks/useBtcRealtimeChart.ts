@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { Dispatch, RefObject, SetStateAction } from "react";
 import { ColorType, LineSeries, LineStyle, createChart, createSeriesMarkers } from "lightweight-charts";
 import {
   BTC_CIRCULATING_SUPPLY,
@@ -16,16 +17,30 @@ import {
   formatTime,
   formatTitlePrice
 } from "../utils/formatters";
+import type {
+  ChartEngine,
+  HistoryResultItem,
+  Metric,
+  PredictionSignal,
+  StatusTone,
+  TooltipState
+} from "../types/chart";
 
 const MAX_POINTS = 20_000;
-function clamp01(value) {
+
+interface PricePoint {
+  time: number;
+  value: number;
+}
+
+function clamp01(value: number) {
   if (!Number.isFinite(value)) return 0.5;
   if (value < 0) return 0;
   if (value > 1) return 1;
   return value;
 }
 
-function approxNormalCdf(z) {
+function approxNormalCdf(z: number) {
   return 1 / (1 + Math.exp(-1.702 * z));
 }
 
@@ -36,7 +51,14 @@ function buildPredictionSignal({
   intervalSeconds,
   targetPrice,
   targetBoundaryTime
-}) {
+}: {
+  points: PricePoint[];
+  currentPrice: number;
+  nowUnixSeconds: number;
+  intervalSeconds: number;
+  targetPrice: number;
+  targetBoundaryTime: number;
+}): PredictionSignal {
   if (
     !Array.isArray(points) ||
     points.length < 4 ||
@@ -89,7 +111,7 @@ function buildPredictionSignal({
   const elapsed = Math.max(1, last.time - first.time);
   const driftPerSecond = (last.value - first.value) / elapsed;
 
-  const deltas = [];
+  const deltas: number[] = [];
   for (let i = 1; i < recent.length; i += 1) {
     const prev = recent[i - 1];
     const curr = recent[i];
@@ -99,12 +121,12 @@ function buildPredictionSignal({
     deltas.push(dp / dt);
   }
 
-  const meanDelta = deltas.length > 0
-    ? deltas.reduce((sum, v) => sum + v, 0) / deltas.length
-    : driftPerSecond;
-  const variance = deltas.length > 1
-    ? deltas.reduce((sum, v) => sum + (v - meanDelta) ** 2, 0) / (deltas.length - 1)
-    : Math.max((Math.abs(meanDelta) * 0.1) ** 2, 1e-6);
+  const meanDelta =
+    deltas.length > 0 ? deltas.reduce((sum, v) => sum + v, 0) / deltas.length : driftPerSecond;
+  const variance =
+    deltas.length > 1
+      ? deltas.reduce((sum, v) => sum + (v - meanDelta) ** 2, 0) / (deltas.length - 1)
+      : Math.max((Math.abs(meanDelta) * 0.1) ** 2, 1e-6);
   const sigmaPerSecond = Math.sqrt(Math.max(variance, 1e-6));
 
   const expectedCloseRaw = currentPrice + driftPerSecond * remainingSeconds;
@@ -114,7 +136,7 @@ function buildPredictionSignal({
   const downProb = 1 - upProb;
 
   const direction = upProb >= downProb ? "UP" : "DOWN";
-  const directionClass = direction === "UP" ? "ok" : "error";
+  const directionClass: StatusTone = direction === "UP" ? "ok" : "error";
 
   return {
     direction,
@@ -126,7 +148,7 @@ function buildPredictionSignal({
   };
 }
 
-function buildBoundaryMarkers(points, intervalSeconds) {
+function buildBoundaryMarkers(points: PricePoint[], intervalSeconds: number) {
   if (!Array.isArray(points) || points.length === 0 || !Number.isFinite(intervalSeconds)) {
     return [];
   }
@@ -143,7 +165,7 @@ function buildBoundaryMarkers(points, intervalSeconds) {
     }));
 }
 
-function findPriceAtOrBefore(points, unixSeconds) {
+function findPriceAtOrBefore(points: PricePoint[], unixSeconds: number) {
   for (let i = points.length - 1; i >= 0; i -= 1) {
     const p = points[i];
     if (p.time <= unixSeconds) {
@@ -153,7 +175,7 @@ function findPriceAtOrBefore(points, unixSeconds) {
   return null;
 }
 
-function formatSignedDelta(currentPrice, targetPrice) {
+function formatSignedDelta(currentPrice: number, targetPrice: number) {
   if (!Number.isFinite(currentPrice) || !Number.isFinite(targetPrice)) {
     return "";
   }
@@ -163,12 +185,12 @@ function formatSignedDelta(currentPrice, targetPrice) {
   return `${sign}${formatTitlePrice(Math.abs(delta))}`;
 }
 
-function formatResultEntry(startTime, targetPrice, closePrice) {
+function formatResultEntry(startTime: number, targetPrice: number, closePrice: number): HistoryResultItem {
   const diff = closePrice - targetPrice;
   const sign = diff >= 0 ? "+" : "-";
   const absDiff = Math.abs(diff);
-  const resultText = diff > 0 ? "UP" : diff < 0 ? "DOWN" : "FLAT";
-  const deltaClass = diff > 0 ? "ok" : diff < 0 ? "error" : "";
+  const resultText: "UP" | "DOWN" | "FLAT" = diff > 0 ? "UP" : diff < 0 ? "DOWN" : "FLAT";
+  const deltaClass: StatusTone = diff > 0 ? "ok" : diff < 0 ? "error" : "";
 
   return {
     id: `${startTime}-${targetPrice}-${closePrice}`,
@@ -181,12 +203,12 @@ function formatResultEntry(startTime, targetPrice, closePrice) {
   };
 }
 
-function buildHistoryFromPoints(points, intervalSeconds, limit = 10) {
+function buildHistoryFromPoints(points: PricePoint[], intervalSeconds: number, limit = 10): HistoryResultItem[] {
   if (!Array.isArray(points) || points.length === 0 || !Number.isFinite(intervalSeconds)) {
     return [];
   }
 
-  const buckets = [];
+  const buckets: Array<{ start: number; startPrice: number; closePrice: number; lastTime: number }> = [];
   for (const p of points) {
     if (!Number.isFinite(p.time) || !Number.isFinite(p.value)) {
       continue;
@@ -229,38 +251,60 @@ function buildHistoryFromPoints(points, intervalSeconds, limit = 10) {
   return results.slice(-limit).reverse();
 }
 
-export function useBtcRealtimeChart() {
-  const chartContainerRef = useRef(null);
-  const chartHostRef = useRef(null);
-  const chartRef = useRef(null);
-  const priceSeriesRef = useRef(null);
-  const marketCapSeriesRef = useRef(null);
-  const targetPriceLineRef = useRef(null);
-  const boundaryMarkersRef = useRef(null);
-  const latestTickRef = useRef(null);
-  const pricePointsRef = useRef([]);
-  const latestVolume24hRef = useRef("$--");
-  const currentPointRef = useRef(null);
-  const reconnectTimerRef = useRef(null);
-  const websocketRef = useRef(null);
-  const visibleWindowSecondsRef = useRef(DEFAULT_VISIBLE_WINDOW_SECONDS);
-  const targetBoundaryRef = useRef(null);
-  const targetPriceRef = useRef(null);
-  const historyResultsRef = useRef([]);
-  const metricRef = useRef("price");
+interface UseBtcRealtimeChartReturn {
+  chartContainerRef: RefObject<HTMLDivElement | null>;
+  chartHostRef: RefObject<HTMLDivElement | null>;
+  chartEngine: ChartEngine;
+  setChartEngine: Dispatch<SetStateAction<ChartEngine>>;
+  metric: Metric;
+  setMetric: Dispatch<SetStateAction<Metric>>;
+  visibleWindowSeconds: number;
+  setVisibleWindowSeconds: Dispatch<SetStateAction<number>>;
+  connection: string;
+  connectionClass: StatusTone;
+  latestPrice: string;
+  targetPrice: string;
+  targetTime: string;
+  latestMarketCap: string;
+  lastUpdate: string;
+  message: string;
+  tooltip: TooltipState;
+  historyResults: HistoryResultItem[];
+  predictionSignal: PredictionSignal;
+}
 
-  const [chartEngine, setChartEngine] = useState("simple");
-  const [metric, setMetric] = useState("price");
+export function useBtcRealtimeChart(): UseBtcRealtimeChartReturn {
+  const chartContainerRef = useRef<HTMLDivElement | null>(null);
+  const chartHostRef = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<any>(null);
+  const priceSeriesRef = useRef<any>(null);
+  const marketCapSeriesRef = useRef<any>(null);
+  const targetPriceLineRef = useRef<any>(null);
+  const boundaryMarkersRef = useRef<any>(null);
+  const latestTickRef = useRef<{ price: number; time: number } | null>(null);
+  const pricePointsRef = useRef<PricePoint[]>([]);
+  const latestVolume24hRef = useRef("$--");
+  const currentPointRef = useRef<PricePoint | null>(null);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const websocketRef = useRef<WebSocket | null>(null);
+  const visibleWindowSecondsRef = useRef(DEFAULT_VISIBLE_WINDOW_SECONDS);
+  const targetBoundaryRef = useRef<number | null>(null);
+  const targetPriceRef = useRef<number | null>(null);
+  const historyResultsRef = useRef<HistoryResultItem[]>([]);
+  const metricRef = useRef<Metric>("price");
+
+  const [chartEngine, setChartEngine] = useState<ChartEngine>("simple");
+  const [metric, setMetric] = useState<Metric>("price");
   const [visibleWindowSeconds, setVisibleWindowSeconds] = useState(DEFAULT_VISIBLE_WINDOW_SECONDS);
   const [connection, setConnection] = useState("Connecting...");
-  const [connectionClass, setConnectionClass] = useState("warning");
+  const [connectionClass, setConnectionClass] = useState<StatusTone>("warning");
   const [latestPrice, setLatestPrice] = useState("$--");
   const [latestMarketCap, setLatestMarketCap] = useState("$--");
   const [latestVolume24h, setLatestVolume24h] = useState("$--");
   const [targetPrice, setTargetPrice] = useState("$--");
   const [targetTime, setTargetTime] = useState("--");
-  const [historyResults, setHistoryResults] = useState([]);
-  const [predictionSignal, setPredictionSignal] = useState({
+  const [historyResults, setHistoryResults] = useState<HistoryResultItem[]>([]);
+  const [predictionSignal, setPredictionSignal] = useState<PredictionSignal>({
     direction: "WAITING",
     directionClass: "warning",
     upProbability: "--",
@@ -270,7 +314,7 @@ export function useBtcRealtimeChart() {
   });
   const [lastUpdate, setLastUpdate] = useState("--");
   const [message, setMessage] = useState("Initializing chart...");
-  const [tooltip, setTooltip] = useState({
+  const [tooltip, setTooltip] = useState<TooltipState>({
     visible: false,
     x: 0,
     y: 0,
@@ -331,7 +375,7 @@ export function useBtcRealtimeChart() {
       priceLineVisible: true,
       priceFormat: {
         type: "custom",
-        formatter: (v) => formatMarketCap(v)
+        formatter: (v: number) => formatMarketCap(v)
       }
     });
 
@@ -353,23 +397,23 @@ export function useBtcRealtimeChart() {
       height: container.clientHeight
     });
 
-    let tickInterval = null;
+    let tickInterval: number | null = null;
     let pollInFlight = false;
 
-    function refreshPredictionSignal(currentPrice, nowUnixSeconds) {
+    function refreshPredictionSignal(currentPrice: number, nowUnixSeconds: number) {
       setPredictionSignal(
         buildPredictionSignal({
           points: pricePointsRef.current,
           currentPrice,
           nowUnixSeconds,
           intervalSeconds: visibleWindowSecondsRef.current,
-          targetPrice: targetPriceRef.current,
-          targetBoundaryTime: targetBoundaryRef.current
+          targetPrice: targetPriceRef.current as number,
+          targetBoundaryTime: targetBoundaryRef.current as number
         })
       );
     }
 
-    function updateTargetPrice(nowUnixSeconds) {
+    function updateTargetPrice(nowUnixSeconds: number) {
       if (!Number.isFinite(nowUnixSeconds)) return;
       const intervalSeconds = visibleWindowSecondsRef.current;
       const boundaryTime = Math.floor(nowUnixSeconds / intervalSeconds) * intervalSeconds;
@@ -386,7 +430,7 @@ export function useBtcRealtimeChart() {
         Number.isFinite(targetPriceRef.current)
       ) {
         const next = [
-          formatResultEntry(targetBoundaryRef.current, targetPriceRef.current, boundaryPrice),
+          formatResultEntry(targetBoundaryRef.current as number, targetPriceRef.current as number, boundaryPrice),
           ...historyResultsRef.current
         ].slice(0, 10);
         historyResultsRef.current = next;
@@ -399,7 +443,7 @@ export function useBtcRealtimeChart() {
       setTargetTime(formatTime(boundaryTime));
       const latestLivePrice = latestTickRef.current?.price;
       const latestLiveTime = latestTickRef.current?.time ?? nowUnixSeconds;
-      refreshPredictionSignal(latestLivePrice, latestLiveTime);
+      refreshPredictionSignal(latestLivePrice as number, latestLiveTime);
 
       if (!priceSeriesRef.current) return;
 
@@ -420,22 +464,22 @@ export function useBtcRealtimeChart() {
       });
     }
 
-    function setVisibleRangeSafely(toUnixSeconds) {
+    function setVisibleRangeSafely(toUnixSeconds: number) {
       if (!Number.isFinite(toUnixSeconds)) return;
       if (!currentPointRef.current) return;
 
       const windowSeconds = visibleWindowSecondsRef.current;
       try {
         chart.timeScale().setVisibleRange({
-          from: toUnixSeconds - windowSeconds,
-          to: toUnixSeconds + 5
+          from: (toUnixSeconds - windowSeconds) as any,
+          to: (toUnixSeconds + 5) as any
         });
       } catch {
         // Lightweight Charts can throw while internal time scale is not ready.
       }
     }
 
-    function applyLivePrice(price, unixSeconds) {
+    function applyLivePrice(price: number, unixSeconds: number) {
       if (!Number.isFinite(price) || !Number.isFinite(unixSeconds)) return;
       latestTickRef.current = { price, time: unixSeconds };
 
@@ -482,7 +526,7 @@ export function useBtcRealtimeChart() {
       setLatestMarketCap(formatMarketCap(price * BTC_CIRCULATING_SUPPLY));
       setLastUpdate(formatTime(unixSeconds));
       refreshPredictionSignal(price, unixSeconds);
-      const deltaText = formatSignedDelta(price, targetPriceRef.current);
+      const deltaText = formatSignedDelta(price, targetPriceRef.current as number);
       document.title = deltaText
         ? `${formatTitlePrice(price)} ${deltaText} · ${DOCUMENT_TITLE_BASE}`
         : `${formatTitlePrice(price)} · ${DOCUMENT_TITLE_BASE}`;
@@ -497,17 +541,17 @@ export function useBtcRealtimeChart() {
 
       const raw = await response.json();
       const candles = raw
-        .map((entry) => ({
+        .map((entry: number[]) => ({
           time: entry[0],
           close: Number(entry[4])
         }))
-        .sort((a, b) => a.time - b.time);
+        .sort((a: { time: number }, b: { time: number }) => a.time - b.time);
 
-      const priceData = candles.map((c) => ({ time: c.time, value: c.close }));
+      const priceData = candles.map((c: { time: number; close: number }) => ({ time: c.time, value: c.close }));
       pricePointsRef.current = priceData.slice(-MAX_POINTS);
       priceSeries.setData(priceData);
       marketCapSeries.setData(
-        priceData.map((p) => ({
+        priceData.map((p: PricePoint) => ({
           time: p.time,
           value: p.value * BTC_CIRCULATING_SUPPLY
         }))
@@ -530,7 +574,7 @@ export function useBtcRealtimeChart() {
 
       const lastTime = pricePointsRef.current[pricePointsRef.current.length - 1]?.time;
       if (Number.isFinite(lastTime)) {
-        updateTargetPrice(lastTime);
+        updateTargetPrice(lastTime as number);
       }
 
       const initialHistory = buildHistoryFromPoints(
@@ -616,7 +660,7 @@ export function useBtcRealtimeChart() {
         setConnection("Disconnected");
         setConnectionClass("error");
         setMessage("Socket closed. Reconnecting in 3s...");
-        reconnectTimerRef.current = setTimeout(connectSocket, 3000);
+        reconnectTimerRef.current = window.setTimeout(connectSocket, 3000);
       });
 
       ws.addEventListener("error", () => {
@@ -632,15 +676,16 @@ export function useBtcRealtimeChart() {
         await loadInitialCandles();
         connectSocket();
         await pollTickerOnce();
-        tickInterval = setInterval(pollTickerOnce, 1000);
-      } catch (error) {
+        tickInterval = window.setInterval(pollTickerOnce, 1000);
+      } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : "Unknown startup error";
         setConnection("Failed");
         setConnectionClass("error");
-        setMessage(`Startup error: ${error.message}`);
+        setMessage(`Startup error: ${errorMessage}`);
       }
     })();
 
-    const handleCrosshairMove = (param) => {
+    const handleCrosshairMove = (param: any) => {
       if (
         !param ||
         !param.point ||
@@ -742,7 +787,7 @@ export function useBtcRealtimeChart() {
       setPredictionSignal(
         buildPredictionSignal({
           points: pricePointsRef.current,
-          currentPrice: latestTickRef.current?.price,
+          currentPrice: latestTickRef.current?.price as number,
           nowUnixSeconds: latestTickRef.current?.time ?? tickTime,
           intervalSeconds: visibleWindowSeconds,
           targetPrice: boundaryPrice,

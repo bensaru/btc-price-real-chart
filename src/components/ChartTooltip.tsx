@@ -1,4 +1,10 @@
-export default function ChartTooltip({ tooltip }) {
+import type { TooltipState } from "../types/chart";
+
+interface ChartTooltipProps {
+  tooltip: TooltipState;
+}
+
+export default function ChartTooltip({ tooltip }: ChartTooltipProps) {
   if (!tooltip.visible) {
     return null;
   }
