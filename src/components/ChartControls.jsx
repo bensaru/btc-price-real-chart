@@ -5,7 +5,9 @@ export default function ChartControls({
   setVisibleWindowSeconds,
   timeWindowOptions,
   chartEngine,
-  setChartEngine
+  setChartEngine,
+  autoRefreshEnabled,
+  setAutoRefreshEnabled
 }) {
   return (
     <section className="chart-controls">
@@ -64,6 +66,15 @@ export default function ChartControls({
           onClick={() => setChartEngine("tradingview")}
         >
           TradingView
+        </button>
+      </div>
+      <div className="toggle-group">
+        <button
+          type="button"
+          className={autoRefreshEnabled ? "toggle-btn active" : "toggle-btn"}
+          onClick={() => setAutoRefreshEnabled((prev) => !prev)}
+        >
+          Auto refresh 5m: {autoRefreshEnabled ? "On" : "Off"}
         </button>
       </div>
     </section>

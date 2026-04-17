@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import ChartControls from "./components/ChartControls";
 import HistoryResults from "./components/HistoryResults";
 import ChartViewport from "./components/ChartViewport";
@@ -8,6 +9,8 @@ import {
 import { useBtcRealtimeChart } from "./hooks/useBtcRealtimeChart";
 
 export default function App() {
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(false);
+
   const {
     chartContainerRef,
     chartHostRef,
@@ -32,6 +35,16 @@ export default function App() {
 
   const tradingViewInterval = TIME_WINDOW_OPTIONS.find((o) => o.value === visibleWindowSeconds)?.tvInterval ?? "5";
   const tradingViewSrc = `https://s.tradingview.com/widgetembed/?symbol=BITSTAMP%3ABTCUSD&interval=${tradingViewInterval}&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=1f2937&studies=[]&theme=dark&style=1&timezone=Etc%2FUTC&withdateranges=1&hideideas=1&enable_publishing=0&allow_symbol_change=1`;
+
+  useEffect(() => {
+    if (!autoRefreshEnabled) return undefined;
+    const timerId = window.setInterval(() => {
+      window.location.reload();
+    }, 5 * 60 * 1000);
+    return () => {
+      window.clearInterval(timerId);
+    };
+  }, [autoRefreshEnabled]);
 
   return (
     <main className="container">
@@ -60,6 +73,8 @@ export default function App() {
         timeWindowOptions={TIME_WINDOW_OPTIONS}
         chartEngine={chartEngine}
         setChartEngine={setChartEngine}
+        autoRefreshEnabled={autoRefreshEnabled}
+        setAutoRefreshEnabled={setAutoRefreshEnabled}
       />
 
       <ChartViewport
