@@ -1,23 +1,13 @@
-import { useEffect, useState } from "react";
-import ChartControls from "./components/ChartControls";
+import { useEffect } from "react";
 import HistoryResults from "./components/HistoryResults";
 import ChartViewport from "./components/ChartViewport";
 import StatusRow from "./components/StatusRow";
-import { TIME_WINDOW_OPTIONS } from "./constants/chartConfig";
 import { useBtcRealtimeChart } from "./hooks/useBtcRealtimeChart";
 
 export default function App() {
-  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(false);
-
   const {
     chartContainerRef,
     chartHostRef,
-    chartEngine,
-    setChartEngine,
-    metric,
-    setMetric,
-    visibleWindowSeconds,
-    setVisibleWindowSeconds,
     connection,
     connectionClass,
     latestPrice,
@@ -31,26 +21,18 @@ export default function App() {
     predictionSignal
   } = useBtcRealtimeChart();
 
-  const tradingViewInterval =
-    TIME_WINDOW_OPTIONS.find((o) => o.value === visibleWindowSeconds)?.tvInterval ?? "5";
-  const tradingViewSrc = `https://s.tradingview.com/widgetembed/?symbol=BITSTAMP%3ABTCUSD&interval=${tradingViewInterval}&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=1f2937&studies=[]&theme=dark&style=1&timezone=Etc%2FUTC&withdateranges=1&hideideas=1&enable_publishing=0&allow_symbol_change=1`;
-
   useEffect(() => {
-    if (!autoRefreshEnabled) return undefined;
-    const timerId = window.setInterval(() => {
-      window.location.reload();
-    }, 5 * 60 * 1000);
-    return () => {
-      window.clearInterval(timerId);
-    };
-  }, [autoRefreshEnabled]);
+    // Keep a stable title when no live tick has arrived yet.
+    if (!latestPrice || latestPrice === "$--") {
+      document.title = "BTC Live Chart";
+    }
+  }, [latestPrice]);
 
   return (
     <main className="container">
       <h1>BTC/USD Live Chart</h1>
       <p className="subtitle">
-        React + Vite + Lightweight Charts. Continuous real-time BTC updates via WebSocket, with
-        REST polling as a backup if a tick is delayed. Default timeline window is 5 minutes.
+        Continuous real-time BTC/USD updates every second (WebSocket with REST fallback).
       </p>
 
       <StatusRow
@@ -64,24 +46,12 @@ export default function App() {
         predictionSignal={predictionSignal}
       />
 
-      <ChartControls
-        metric={metric}
-        setMetric={setMetric}
-        visibleWindowSeconds={visibleWindowSeconds}
-        setVisibleWindowSeconds={setVisibleWindowSeconds}
-        timeWindowOptions={TIME_WINDOW_OPTIONS}
-        chartEngine={chartEngine}
-        setChartEngine={setChartEngine}
-        autoRefreshEnabled={autoRefreshEnabled}
-        setAutoRefreshEnabled={setAutoRefreshEnabled}
-      />
-
       <ChartViewport
-        chartEngine={chartEngine}
+        chartEngine="simple"
         chartHostRef={chartHostRef}
         chartContainerRef={chartContainerRef}
         tooltip={tooltip}
-        tradingViewSrc={tradingViewSrc}
+        tradingViewSrc=""
       />
       <HistoryResults items={historyResults} />
       <p id="message">{message}</p>
