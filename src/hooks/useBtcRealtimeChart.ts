@@ -252,9 +252,9 @@ function buildMainChartMarkers(
   const highLowMarkers = buildCurrentBucketHighLowMarkers(points, intervalSeconds, nowUnixSeconds);
   const boundaryMarkers = buildBoundaryMarkers(points, intervalSeconds, boundaryStartPrices);
 
-  // Draw larger high/low first, then small red boundary markers on top
-  // so overlaps are still visible as two circles.
-  return [...highLowMarkers, ...boundaryMarkers];
+  // Draw boundary markers first and high/low markers last so
+  // high/low circles stay visible when timestamps overlap.
+  return [...boundaryMarkers, ...highLowMarkers];
 }
 
 function findPriceAtOrBefore(points: PricePoint[], unixSeconds: number) {
