@@ -195,22 +195,6 @@ h1 {
   position: relative;
 }
 
-.history-snapshot-section {
-  margin-top: 12px;
-}
-
-.history-snapshot-controls {
-  margin-bottom: 10px;
-}
-
-#history-snapshot-chart {
-  width: 100%;
-  height: 280px;
-  border-radius: 12px;
-  overflow: hidden;
-  border: 1px solid #1f2937;
-}
-
 .history-panel {
   margin: 12px 0 14px;
   padding: 12px;
