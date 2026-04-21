@@ -1,5 +1,3 @@
-export type ChartEngine = "simple" | "tradingview";
-export type Metric = "price" | "marketcap";
 export type StatusTone = "ok" | "warning" | "error" | "";
 
 export interface TimeWindowOption {
@@ -23,6 +21,8 @@ export interface TooltipState {
 export interface HistoryResultItem {
   id: string;
   startTime: string;
+  /** Interval close time (same scale as Start). */
+  intervalEndTime: string;
   targetPrice: string;
   closePrice: string;
   diffText: string;

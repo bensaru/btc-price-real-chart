@@ -16,6 +16,7 @@ export default function HistoryResults({ items }: HistoryResultsProps) {
             <thead>
               <tr>
                 <th>Start</th>
+                <th>End</th>
                 <th>Target Price</th>
                 <th>Close</th>
                 <th>Diff</th>
@@ -26,6 +27,7 @@ export default function HistoryResults({ items }: HistoryResultsProps) {
               {items.map((item) => (
                 <tr key={item.id}>
                   <td>{item.startTime}</td>
+                  <td>{item.intervalEndTime}</td>
                   <td>{item.targetPrice}</td>
                   <td>{item.closePrice}</td>
                   <td className={item.deltaClass}>{item.diffText}</td>

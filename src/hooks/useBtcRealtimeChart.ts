@@ -17,29 +17,13 @@ import {
   formatTime,
   formatTitlePrice
 } from "../utils/formatters";
-import type {
-  ChartEngine,
-  HistoryResultItem,
-  Metric,
-  PredictionSignal,
-  StatusTone,
-  TooltipState
-} from "../types/chart";
+import type { HistoryResultItem, PredictionSignal, StatusTone, TooltipState } from "../types/chart";
 
 const MAX_POINTS = 20_000;
-const CANDLE_GRANULARITY_SECONDS = 60;
-const MAX_CANDLES_PER_REQUEST = 300;
-const STALE_FEED_MS = 15_000;
-const WATCHDOG_INTERVAL_MS = 5_000;
 
 interface PricePoint {
   time: number;
   value: number;
-}
-
-interface CandleFetchResult {
-  points: PricePoint[];
-  boundaryStartPrices: Map<number, number>;
 }
 
 function clamp01(value: number) {
@@ -184,6 +168,20 @@ function findPriceAtOrBefore(points: PricePoint[], unixSeconds: number) {
   return null;
 }
 
+/** Merge REST candle baseline with live ticks (same unix second overwrites). Keeps full history on the chart. */
+function mergeBaselineWithLive(baseline: PricePoint[], live: Map<number, number>): PricePoint[] {
+  const map = new Map<number, number>();
+  for (const p of baseline) {
+    map.set(p.time, p.value);
+  }
+  for (const [t, v] of live) {
+    map.set(t, v);
+  }
+  return [...map.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([time, value]) => ({ time, value }));
+}
+
 function formatSignedDelta(currentPrice: number, targetPrice: number) {
   if (!Number.isFinite(currentPrice) || !Number.isFinite(targetPrice)) {
     return "";
@@ -194,17 +192,23 @@ function formatSignedDelta(currentPrice: number, targetPrice: number) {
   return `${sign}${formatTitlePrice(Math.abs(delta))}`;
 }
 
-function formatResultEntry(startTime: number, targetPrice: number, closePrice: number): HistoryResultItem {
-  const diff = closePrice - targetPrice;
+function formatResultEntry(
+  startTime: number,
+  intervalSeconds: number,
+  openPrice: number,
+  closePrice: number
+): HistoryResultItem {
+  const diff = closePrice - openPrice;
   const sign = diff >= 0 ? "+" : "-";
   const absDiff = Math.abs(diff);
   const resultText: "UP" | "DOWN" | "FLAT" = diff > 0 ? "UP" : diff < 0 ? "DOWN" : "FLAT";
   const deltaClass: StatusTone = diff > 0 ? "ok" : diff < 0 ? "error" : "";
 
   return {
-    id: `${startTime}-${targetPrice}-${closePrice}`,
+    id: `${startTime}-${intervalSeconds}-${openPrice}-${closePrice}`,
     startTime: formatTime(startTime),
-    targetPrice: formatPrice(targetPrice),
+    intervalEndTime: formatTime(startTime + intervalSeconds),
+    targetPrice: formatPrice(openPrice),
     closePrice: formatPrice(closePrice),
     diffText: `${sign}${formatPrice(absDiff)}`,
     deltaClass,
@@ -217,12 +221,12 @@ function buildHistoryFromPoints(points: PricePoint[], intervalSeconds: number, l
     return [];
   }
 
-  const buckets: Array<{ start: number; startPrice: number; closePrice: number; lastTime: number }> = [];
-  for (const p of points) {
-    if (!Number.isFinite(p.time) || !Number.isFinite(p.value)) {
-      continue;
-    }
+  const sorted = [...points]
+    .filter((p) => Number.isFinite(p.time) && Number.isFinite(p.value))
+    .sort((a, b) => a.time - b.time);
 
+  const buckets: Array<{ start: number; startPrice: number; closePrice: number; lastTime: number }> = [];
+  for (const p of sorted) {
     const bucketStart = Math.floor(p.time / intervalSeconds) * intervalSeconds;
     const lastBucket = buckets[buckets.length - 1];
     if (!lastBucket || lastBucket.start !== bucketStart) {
@@ -242,7 +246,7 @@ function buildHistoryFromPoints(points: PricePoint[], intervalSeconds: number, l
     return [];
   }
 
-  const latestTime = points[points.length - 1]?.time;
+  const latestTime = sorted[sorted.length - 1]?.time;
   const lastBucket = buckets[buckets.length - 1];
   const isLastBucketComplete =
     Number.isFinite(latestTime) &&
@@ -255,78 +259,14 @@ function buildHistoryFromPoints(points: PricePoint[], intervalSeconds: number, l
   }
 
   const results = completedBuckets.map((bucket) =>
-    formatResultEntry(bucket.start, bucket.startPrice, bucket.closePrice)
+    formatResultEntry(bucket.start, intervalSeconds, bucket.startPrice, bucket.closePrice)
   );
   return results.slice(-limit).reverse();
-}
-
-function mergePoints(existing: PricePoint[], incoming: PricePoint[]): PricePoint[] {
-  const byTime = new Map<number, PricePoint>();
-  for (const point of existing) {
-    byTime.set(point.time, point);
-  }
-  for (const point of incoming) {
-    byTime.set(point.time, point);
-  }
-  return Array.from(byTime.values()).sort((a, b) => a.time - b.time);
-}
-
-async function fetchCandlesRange(startSec: number, endSec: number): Promise<CandleFetchResult> {
-  const allPoints: PricePoint[] = [];
-  const boundaryStartPrices = new Map<number, number>();
-  const chunkSeconds = CANDLE_GRANULARITY_SECONDS * MAX_CANDLES_PER_REQUEST;
-  let cursor = startSec;
-
-  while (cursor < endSec) {
-    const chunkEnd = Math.min(cursor + chunkSeconds, endSec);
-    const startIso = new Date(cursor * 1000).toISOString();
-    const endIso = new Date(chunkEnd * 1000).toISOString();
-    const response = await fetch(
-      `${HISTORY_URL}?granularity=${CANDLE_GRANULARITY_SECONDS}&start=${encodeURIComponent(startIso)}&end=${encodeURIComponent(endIso)}&_ts=${Date.now()}`,
-      {
-        // Do not set Cache-Control / Pragma request headers — Coinbase CORS only allows
-        // Content-Type, Accept, cb-session, cb-fp, cb-form-factor on preflight.
-        cache: "no-store"
-      }
-    );
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status} while loading candle history.`);
-    }
-
-    const raw = await response.json();
-    const chunkPoints: PricePoint[] = raw
-      .map((entry: number[]) => {
-        const time = entry[0];
-        const open = Number(entry[3]);
-        const close = Number(entry[4]);
-        if (Number.isFinite(time) && Number.isFinite(open)) {
-          boundaryStartPrices.set(time, open);
-        }
-        return {
-          time,
-          value: close
-        };
-      })
-      .filter((p: PricePoint) => Number.isFinite(p.time) && Number.isFinite(p.value))
-      .sort((a: PricePoint, b: PricePoint) => a.time - b.time);
-
-    allPoints.push(...chunkPoints);
-    cursor = chunkEnd;
-  }
-
-  return {
-    points: mergePoints([], allPoints),
-    boundaryStartPrices
-  };
 }
 
 interface UseBtcRealtimeChartReturn {
   chartContainerRef: RefObject<HTMLDivElement | null>;
   chartHostRef: RefObject<HTMLDivElement | null>;
-  chartEngine: ChartEngine;
-  setChartEngine: Dispatch<SetStateAction<ChartEngine>>;
-  metric: Metric;
-  setMetric: Dispatch<SetStateAction<Metric>>;
   visibleWindowSeconds: number;
   setVisibleWindowSeconds: Dispatch<SetStateAction<number>>;
   connection: string;
@@ -352,7 +292,10 @@ export function useBtcRealtimeChart(): UseBtcRealtimeChartReturn {
   const boundaryMarkersRef = useRef<any>(null);
   const latestTickRef = useRef<{ price: number; time: number } | null>(null);
   const lastSocketTickReceivedAtMsRef = useRef<number>(0);
-  const lastAnyTickReceivedAtMsRef = useRef<number>(0);
+  /** Immutable 1m candles from REST (never replaced by live ticks alone). */
+  const candleBaselineRef = useRef<PricePoint[]>([]);
+  /** Live prices keyed by unix seconds (session updates). */
+  const liveByTimeRef = useRef<Map<number, number>>(new Map());
   const pricePointsRef = useRef<PricePoint[]>([]);
   const latestVolume24hRef = useRef("$--");
   const currentPointRef = useRef<PricePoint | null>(null);
@@ -361,13 +304,8 @@ export function useBtcRealtimeChart(): UseBtcRealtimeChartReturn {
   const visibleWindowSecondsRef = useRef(DEFAULT_VISIBLE_WINDOW_SECONDS);
   const targetBoundaryRef = useRef<number | null>(null);
   const targetPriceRef = useRef<number | null>(null);
-  const boundaryStartPriceByTimeRef = useRef<Map<number, number>>(new Map());
-  const boundaryOpenFetchInFlightRef = useRef<Set<number>>(new Set());
   const historyResultsRef = useRef<HistoryResultItem[]>([]);
-  const metricRef = useRef<Metric>("price");
 
-  const [chartEngine, setChartEngine] = useState<ChartEngine>("simple");
-  const [metric, setMetric] = useState<Metric>("price");
   const [visibleWindowSeconds, setVisibleWindowSeconds] = useState(DEFAULT_VISIBLE_WINDOW_SECONDS);
   const [connection, setConnection] = useState("Connecting...");
   const [connectionClass, setConnectionClass] = useState<StatusTone>("warning");
@@ -420,7 +358,7 @@ export function useBtcRealtimeChart(): UseBtcRealtimeChartReturn {
       timeScale: {
         borderColor: "#334155",
         timeVisible: true,
-        secondsVisible: true
+        secondsVisible: false
       },
       rightPriceScale: {
         borderColor: "#334155"
@@ -471,7 +409,6 @@ export function useBtcRealtimeChart(): UseBtcRealtimeChartReturn {
     });
 
     let tickInterval: number | null = null;
-    let watchdogInterval: number | null = null;
     let pollInFlight = false;
 
     function refreshPredictionSignal(currentPrice: number, nowUnixSeconds: number) {
@@ -491,34 +428,7 @@ export function useBtcRealtimeChart(): UseBtcRealtimeChartReturn {
       if (!Number.isFinite(nowUnixSeconds)) return;
       const intervalSeconds = visibleWindowSecondsRef.current;
       const boundaryTime = Math.floor(nowUnixSeconds / intervalSeconds) * intervalSeconds;
-      const boundaryOpen = boundaryStartPriceByTimeRef.current.get(boundaryTime);
-      const fallbackBoundaryPrice = findPriceAtOrBefore(pricePointsRef.current, boundaryTime);
-      if (!Number.isFinite(boundaryOpen)) {
-        if (!boundaryOpenFetchInFlightRef.current.has(boundaryTime)) {
-          boundaryOpenFetchInFlightRef.current.add(boundaryTime);
-          void (async () => {
-            try {
-              const { boundaryStartPrices } = await fetchCandlesRange(
-                boundaryTime,
-                boundaryTime + CANDLE_GRANULARITY_SECONDS
-              );
-              const resolvedOpen = boundaryStartPrices.get(boundaryTime);
-              if (Number.isFinite(resolvedOpen)) {
-                boundaryStartPriceByTimeRef.current.set(boundaryTime, resolvedOpen as number);
-                const latestTime = latestTickRef.current?.time ?? nowUnixSeconds;
-                updateTargetPrice(latestTime);
-              }
-            } catch {
-              // keep current target state if boundary open fetch fails
-            } finally {
-              boundaryOpenFetchInFlightRef.current.delete(boundaryTime);
-            }
-          })();
-        }
-      }
-      const boundaryPrice = Number.isFinite(boundaryOpen)
-        ? (boundaryOpen as number)
-        : fallbackBoundaryPrice;
+      const boundaryPrice = findPriceAtOrBefore(pricePointsRef.current, boundaryTime);
       if (!Number.isFinite(boundaryPrice)) return;
 
       const changedBoundary = targetBoundaryRef.current !== boundaryTime;
@@ -570,7 +480,6 @@ export function useBtcRealtimeChart(): UseBtcRealtimeChartReturn {
     function applyLivePrice(price: number, unixSeconds: number) {
       if (!Number.isFinite(price) || !Number.isFinite(unixSeconds)) return;
       latestTickRef.current = { price, time: unixSeconds };
-      lastAnyTickReceivedAtMsRef.current = Date.now();
 
       const bucket = unixSeconds;
       const current = currentPointRef.current;
@@ -579,34 +488,41 @@ export function useBtcRealtimeChart(): UseBtcRealtimeChartReturn {
         return;
       }
 
-      if (!current || current.time < bucket) {
-        currentPointRef.current = { time: bucket, value: price };
-      } else {
-        current.value = price;
+      liveByTimeRef.current.set(bucket, price);
+
+      const baseline = candleBaselineRef.current;
+      const oldestBaseline = baseline.length > 0 ? baseline[0].time : unixSeconds;
+      for (const t of [...liveByTimeRef.current.keys()]) {
+        if (t < oldestBaseline - 120) {
+          liveByTimeRef.current.delete(t);
+        }
+      }
+
+      const merged = mergeBaselineWithLive(baseline, liveByTimeRef.current);
+      const trimmed =
+        merged.length > MAX_POINTS ? merged.slice(merged.length - MAX_POINTS) : merged;
+      pricePointsRef.current = trimmed;
+
+      const lastPt = trimmed[trimmed.length - 1];
+      if (lastPt) {
+        currentPointRef.current = lastPt;
       }
 
       if (priceSeriesRef.current) {
-        priceSeriesRef.current.update(currentPointRef.current);
+        priceSeriesRef.current.setData(trimmed as any);
       }
       if (marketCapSeriesRef.current) {
-        marketCapSeriesRef.current.update({
-          time: currentPointRef.current.time,
-          value: price * BTC_CIRCULATING_SUPPLY
-        });
+        marketCapSeriesRef.current.setData(
+          trimmed.map((p) => ({
+            time: p.time as any,
+            value: p.value * BTC_CIRCULATING_SUPPLY
+          })) as any
+        );
       }
 
       setVisibleRangeSafely(unixSeconds);
 
       const points = pricePointsRef.current;
-      const last = points[points.length - 1];
-      if (!last || currentPointRef.current.time > last.time) {
-        points.push({ time: currentPointRef.current.time, value: currentPointRef.current.value });
-      } else if (currentPointRef.current.time === last.time) {
-        points[points.length - 1] = { time: currentPointRef.current.time, value: currentPointRef.current.value };
-      }
-      if (points.length > MAX_POINTS) {
-        points.splice(0, points.length - MAX_POINTS);
-      }
 
       if (boundaryMarkersRef.current) {
         boundaryMarkersRef.current.setMarkers(
@@ -635,35 +551,43 @@ export function useBtcRealtimeChart(): UseBtcRealtimeChartReturn {
     }
 
     async function loadInitialCandles() {
-      setMessage("Live feed connected. Syncing recent history...");
-      const nowSec = Math.floor(Date.now() / 1000);
-      const lookbackSeconds = Math.max(6 * 60 * 60, visibleWindowSecondsRef.current * 20);
-      const { points: priceData, boundaryStartPrices } = await fetchCandlesRange(
-        nowSec - lookbackSeconds,
-        nowSec
-      );
-      boundaryStartPriceByTimeRef.current = boundaryStartPrices;
-      const mergedPoints = mergePoints(pricePointsRef.current, priceData).slice(-MAX_POINTS);
-      pricePointsRef.current = mergedPoints;
-      priceSeries.setData(mergedPoints as any);
+      setMessage("Loading recent BTC/USD candles...");
+      const endSec = Math.floor(Date.now() / 1000);
+      const startSec = endSec - 60 * 300;
+      const response = await fetch(`${HISTORY_URL}?granularity=60&start=${startSec}&end=${endSec}`);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status} while loading candle history.`);
+      }
+
+      const raw = await response.json();
+      const candles = raw
+        .map((entry: number[]) => ({
+          time: entry[0],
+          close: Number(entry[4])
+        }))
+        .sort((a: { time: number }, b: { time: number }) => a.time - b.time);
+
+      const priceData = candles.map((c: { time: number; close: number }) => ({ time: c.time, value: c.close }));
+      candleBaselineRef.current = priceData.map((p) => ({ ...p }));
+      liveByTimeRef.current = new Map();
+
+      const merged = mergeBaselineWithLive(candleBaselineRef.current, liveByTimeRef.current);
+      const trimmed = merged.length > MAX_POINTS ? merged.slice(merged.length - MAX_POINTS) : merged;
+      pricePointsRef.current = trimmed;
+      priceSeries.setData(trimmed as any);
       marketCapSeries.setData(
-        mergedPoints.map((p: PricePoint) => ({
-          time: p.time,
+        trimmed.map((p: PricePoint) => ({
+          time: p.time as any,
           value: p.value * BTC_CIRCULATING_SUPPLY
         })) as any
       );
-      chart.timeScale().fitContent();
-
-      const liveTick = latestTickRef.current;
-      const latestMergedPoint = mergedPoints[mergedPoints.length - 1];
-      if (liveTick && Number.isFinite(liveTick.price) && Number.isFinite(liveTick.time)) {
-        applyLivePrice(liveTick.price, liveTick.time);
-      } else if (latestMergedPoint) {
-        currentPointRef.current = { time: latestMergedPoint.time, value: latestMergedPoint.value };
-        applyLivePrice(latestMergedPoint.value, latestMergedPoint.time);
+      if (trimmed.length > 0) {
+        const last = trimmed[trimmed.length - 1];
+        currentPointRef.current = { time: last.time, value: last.value };
+        applyLivePrice(last.value, last.time);
       }
 
-      setMessage("Receiving real-time BTC/USD ticks.");
+      setMessage("History loaded. Connecting to live feed...");
 
       if (boundaryMarkersRef.current) {
         boundaryMarkersRef.current.setMarkers(
@@ -683,15 +607,26 @@ export function useBtcRealtimeChart(): UseBtcRealtimeChartReturn {
       );
       historyResultsRef.current = initialHistory;
       setHistoryResults(initialHistory);
+
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          chart.applyOptions({
+            width: container.clientWidth,
+            height: container.clientHeight
+          });
+          const t = latestTickRef.current?.time ?? currentPointRef.current?.time;
+          if (Number.isFinite(t)) {
+            setVisibleRangeSafely(t as number);
+          }
+        });
+      });
     }
 
     async function pollTickerOnce() {
       if (pollInFlight) return;
       pollInFlight = true;
       try {
-        const res = await fetch(`${TICKER_REST_URL}?_ts=${Date.now()}`, {
-          cache: "no-store"
-        });
+        const res = await fetch(TICKER_REST_URL);
         if (!res.ok) return;
         const data = await res.json();
         const price = Number(data.price);
@@ -738,7 +673,6 @@ export function useBtcRealtimeChart(): UseBtcRealtimeChartReturn {
         setConnection("Connected");
         setConnectionClass("ok");
         setMessage("Receiving real-time BTC/USD ticks.");
-        lastSocketTickReceivedAtMsRef.current = Date.now();
       });
 
       ws.addEventListener("message", (event) => {
@@ -779,47 +713,18 @@ export function useBtcRealtimeChart(): UseBtcRealtimeChartReturn {
     }
 
     (async () => {
-      lastAnyTickReceivedAtMsRef.current = Date.now();
-      connectSocket();
-      await pollTickerOnce();
-      tickInterval = window.setInterval(pollTickerOnce, 1000);
-      watchdogInterval = window.setInterval(() => {
-        const nowMs = Date.now();
-        const sinceAnyTick = nowMs - lastAnyTickReceivedAtMsRef.current;
-        const sinceSocketTick = nowMs - lastSocketTickReceivedAtMsRef.current;
-
-        if (sinceAnyTick > STALE_FEED_MS) {
-          setConnection("Resyncing...");
-          setConnectionClass("warning");
-          setMessage("Feed looks stale. Refreshing ticker and reconnecting socket...");
-          pollTickerOnce();
-        }
-
-        if (
-          websocketRef.current &&
-          websocketRef.current.readyState === WebSocket.OPEN &&
-          sinceSocketTick > STALE_FEED_MS
-        ) {
-          websocketRef.current.close();
-        }
-      }, WATCHDOG_INTERVAL_MS);
-
       try {
         await loadInitialCandles();
+        connectSocket();
+        await pollTickerOnce();
+        tickInterval = window.setInterval(pollTickerOnce, 1000);
       } catch (error: unknown) {
-        const errorMessage = error instanceof Error ? error.message : "Unknown history sync error";
-        setMessage(`Live feed active. History sync failed: ${errorMessage}`);
+        const errorMessage = error instanceof Error ? error.message : "Unknown startup error";
+        setConnection("Failed");
+        setConnectionClass("error");
+        setMessage(`Startup error: ${errorMessage}`);
       }
     })();
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState !== "visible") return;
-      pollTickerOnce();
-      if (!websocketRef.current || websocketRef.current.readyState !== WebSocket.OPEN) {
-        connectSocket();
-      }
-    };
-    window.addEventListener("visibilitychange", handleVisibilityChange);
 
     const handleCrosshairMove = (param: any) => {
       if (
@@ -837,20 +742,13 @@ export function useBtcRealtimeChart(): UseBtcRealtimeChartReturn {
       if (!hostRect) return;
 
       const pricePoint = param.seriesData.get(priceSeriesRef.current);
-      const marketCapPoint = param.seriesData.get(marketCapSeriesRef.current);
       const pointTime = typeof param.time === "number" ? param.time : null;
       if (!pointTime) return;
 
-      let primaryLabel = "Price";
+      const primaryLabel = "Price";
       let primaryValue = "$--";
-      if (metricRef.current === "price") {
-        const v = pricePoint?.value;
-        if (typeof v === "number") primaryValue = formatPrice(v);
-      } else {
-        primaryLabel = "Market cap";
-        const v = marketCapPoint?.value;
-        if (typeof v === "number") primaryValue = formatMarketCap(v);
-      }
+      const v = pricePoint?.value;
+      if (typeof v === "number") primaryValue = formatPrice(v);
 
       const x = Math.min(Math.max(param.point.x + 14, 12), Math.max(hostRect.width - 220, 12));
       const y = Math.max(param.point.y - 90, 12);
@@ -873,9 +771,6 @@ export function useBtcRealtimeChart(): UseBtcRealtimeChartReturn {
       if (tickInterval) {
         clearInterval(tickInterval);
       }
-      if (watchdogInterval) {
-        clearInterval(watchdogInterval);
-      }
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current);
       }
@@ -888,7 +783,6 @@ export function useBtcRealtimeChart(): UseBtcRealtimeChartReturn {
       targetPriceLineRef.current = null;
       chart.unsubscribeCrosshairMove(handleCrosshairMove);
       boundaryMarkersRef.current = null;
-      window.removeEventListener("visibilitychange", handleVisibilityChange);
       resizeObserver.disconnect();
       chart.remove();
     };
@@ -901,128 +795,61 @@ export function useBtcRealtimeChart(): UseBtcRealtimeChartReturn {
     if (!chart) return;
 
     const tickTime = latestTickRef.current?.time ?? Math.floor(Date.now() / 1000);
-    const applyWindowState = () => {
-      if (!currentPointRef.current) return;
-      try {
-        chart.timeScale().setVisibleRange({
-          from: (tickTime - visibleWindowSeconds) as any,
-          to: (tickTime + 5) as any
-        });
-      } catch {
-        // Ignore until chart has enough data loaded.
-      }
-
-      if (boundaryMarkersRef.current) {
-        boundaryMarkersRef.current.setMarkers(
-          buildBoundaryMarkers(pricePointsRef.current, visibleWindowSeconds)
-        );
-      }
-
-      const boundaryTime = Math.floor(tickTime / visibleWindowSeconds) * visibleWindowSeconds;
-      const boundaryOpen = boundaryStartPriceByTimeRef.current.get(boundaryTime);
-      const boundaryPrice = Number.isFinite(boundaryOpen)
-        ? (boundaryOpen as number)
-        : findPriceAtOrBefore(pricePointsRef.current, boundaryTime);
-      if (Number.isFinite(boundaryPrice)) {
-        targetBoundaryRef.current = boundaryTime;
-        targetPriceRef.current = boundaryPrice;
-        setTargetPrice(formatPrice(boundaryPrice));
-        setTargetTime(formatTime(boundaryTime));
-        setPredictionSignal(
-          buildPredictionSignal({
-            points: pricePointsRef.current,
-            currentPrice: latestTickRef.current?.price as number,
-            nowUnixSeconds: latestTickRef.current?.time ?? tickTime,
-            intervalSeconds: visibleWindowSeconds,
-            targetPrice: boundaryPrice,
-            targetBoundaryTime: boundaryTime
-          })
-        );
-        if (targetPriceLineRef.current) {
-          targetPriceLineRef.current.applyOptions({ price: boundaryPrice });
-        } else if (priceSeriesRef.current) {
-          targetPriceLineRef.current = priceSeriesRef.current.createPriceLine({
-            price: boundaryPrice,
-            color: "#94a3b8",
-            lineWidth: 1,
-            lineStyle: LineStyle.Dashed,
-            axisLabelVisible: true,
-            title: "Target"
-          });
-        }
-      }
-
-      const rebuiltHistory = buildHistoryFromPoints(pricePointsRef.current, visibleWindowSeconds, 10);
-      historyResultsRef.current = rebuiltHistory;
-      setHistoryResults(rebuiltHistory);
-    };
-
-    const requiredFrom = tickTime - visibleWindowSeconds - 120;
-    const earliestTime = pricePointsRef.current[0]?.time ?? tickTime;
-    if (earliestTime <= requiredFrom) {
-      applyWindowState();
-      return;
+    if (!currentPointRef.current) return;
+    try {
+      chart.timeScale().setVisibleRange({
+        from: (tickTime - visibleWindowSeconds) as any,
+        to: (tickTime + 5) as any
+      });
+    } catch {
+      // Ignore until chart has enough data loaded.
     }
 
-    (async () => {
-      try {
-        const backfillSeconds = Math.max(visibleWindowSeconds * 3, 30 * 60);
-        const { points: backfill, boundaryStartPrices } = await fetchCandlesRange(
-          tickTime - backfillSeconds,
-          tickTime
-        );
-        for (const [ts, open] of boundaryStartPrices.entries()) {
-          boundaryStartPriceByTimeRef.current.set(ts, open);
-        }
+    if (boundaryMarkersRef.current) {
+      boundaryMarkersRef.current.setMarkers(
+        buildBoundaryMarkers(pricePointsRef.current, visibleWindowSeconds)
+      );
+    }
 
-        if (backfill.length > 0) {
-          const merged = mergePoints(pricePointsRef.current, backfill).slice(-MAX_POINTS);
-          pricePointsRef.current = merged;
-          priceSeriesRef.current?.setData(merged);
-          marketCapSeriesRef.current?.setData(
-            merged.map((p) => ({
-              time: p.time,
-              value: p.value * BTC_CIRCULATING_SUPPLY
-            }))
-          );
-        }
-      } catch {
-        // Non-fatal: keep existing in-memory points if backfill fails.
-      } finally {
-        applyWindowState();
+    const boundaryTime = Math.floor(tickTime / visibleWindowSeconds) * visibleWindowSeconds;
+    const boundaryPrice = findPriceAtOrBefore(pricePointsRef.current, boundaryTime);
+    if (Number.isFinite(boundaryPrice)) {
+      targetBoundaryRef.current = boundaryTime;
+      targetPriceRef.current = boundaryPrice;
+      setTargetPrice(formatPrice(boundaryPrice));
+      setTargetTime(formatTime(boundaryTime));
+      setPredictionSignal(
+        buildPredictionSignal({
+          points: pricePointsRef.current,
+          currentPrice: latestTickRef.current?.price as number,
+          nowUnixSeconds: latestTickRef.current?.time ?? tickTime,
+          intervalSeconds: visibleWindowSeconds,
+          targetPrice: boundaryPrice,
+          targetBoundaryTime: boundaryTime
+        })
+      );
+      if (targetPriceLineRef.current) {
+        targetPriceLineRef.current.applyOptions({ price: boundaryPrice });
+      } else if (priceSeriesRef.current) {
+        targetPriceLineRef.current = priceSeriesRef.current.createPriceLine({
+          price: boundaryPrice,
+          color: "#94a3b8",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: "Target"
+        });
       }
-    })();
+    }
+
+    const rebuiltHistory = buildHistoryFromPoints(pricePointsRef.current, visibleWindowSeconds, 10);
+    historyResultsRef.current = rebuiltHistory;
+    setHistoryResults(rebuiltHistory);
   }, [visibleWindowSeconds]);
-
-  useEffect(() => {
-    metricRef.current = metric;
-    const price = priceSeriesRef.current;
-    const marketCap = marketCapSeriesRef.current;
-    if (!price || !marketCap) return;
-    const showPrice = metric === "price";
-    price.applyOptions({ visible: showPrice });
-    marketCap.applyOptions({ visible: !showPrice });
-  }, [metric]);
-
-  useEffect(() => {
-    if (chartEngine !== "simple") return;
-    const chart = chartRef.current;
-    const container = chartContainerRef.current;
-    if (!chart || !container) return;
-    chart.applyOptions({
-      width: container.clientWidth,
-      height: container.clientHeight
-    });
-    chart.timeScale().fitContent();
-  }, [chartEngine]);
 
   return {
     chartContainerRef,
     chartHostRef,
-    chartEngine,
-    setChartEngine,
-    metric,
-    setMetric,
     visibleWindowSeconds,
     setVisibleWindowSeconds,
     connection,

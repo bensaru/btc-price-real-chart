@@ -1,13 +1,19 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import ChartControls from "./components/ChartControls";
 import HistoryResults from "./components/HistoryResults";
 import ChartViewport from "./components/ChartViewport";
 import StatusRow from "./components/StatusRow";
+import { TIME_WINDOW_OPTIONS } from "./constants/chartConfig";
 import { useBtcRealtimeChart } from "./hooks/useBtcRealtimeChart";
 
 export default function App() {
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(false);
+
   const {
     chartContainerRef,
     chartHostRef,
+    visibleWindowSeconds,
+    setVisibleWindowSeconds,
     connection,
     connectionClass,
     latestPrice,
@@ -22,17 +28,21 @@ export default function App() {
   } = useBtcRealtimeChart();
 
   useEffect(() => {
-    // Keep a stable title when no live tick has arrived yet.
-    if (!latestPrice || latestPrice === "$--") {
-      document.title = "BTC Live Chart";
-    }
-  }, [latestPrice]);
+    if (!autoRefreshEnabled) return undefined;
+    const timerId = window.setInterval(() => {
+      window.location.reload();
+    }, 5 * 60 * 1000);
+    return () => {
+      window.clearInterval(timerId);
+    };
+  }, [autoRefreshEnabled]);
 
   return (
     <main className="container">
       <h1>BTC/USD Live Chart</h1>
       <p className="subtitle">
-        Continuous real-time BTC/USD updates every second (WebSocket with REST fallback).
+        React + Vite + Lightweight Charts. Continuous real-time BTC updates via WebSocket, with
+        REST polling as a backup if a tick is delayed. Default timeline window is 5 minutes.
       </p>
 
       <StatusRow
@@ -46,13 +56,15 @@ export default function App() {
         predictionSignal={predictionSignal}
       />
 
-      <ChartViewport
-        chartEngine="simple"
-        chartHostRef={chartHostRef}
-        chartContainerRef={chartContainerRef}
-        tooltip={tooltip}
-        tradingViewSrc=""
+      <ChartControls
+        visibleWindowSeconds={visibleWindowSeconds}
+        setVisibleWindowSeconds={setVisibleWindowSeconds}
+        timeWindowOptions={TIME_WINDOW_OPTIONS}
+        autoRefreshEnabled={autoRefreshEnabled}
+        setAutoRefreshEnabled={setAutoRefreshEnabled}
       />
+
+      <ChartViewport chartHostRef={chartHostRef} chartContainerRef={chartContainerRef} tooltip={tooltip} />
       <HistoryResults items={historyResults} />
       <p id="message">{message}</p>
     </main>
