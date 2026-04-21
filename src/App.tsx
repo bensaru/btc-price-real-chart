@@ -1,13 +1,18 @@
 import { useEffect } from "react";
 import HistoryResults from "./components/HistoryResults";
+import HistorySnapshotChart from "./components/HistorySnapshotChart";
 import ChartViewport from "./components/ChartViewport";
 import StatusRow from "./components/StatusRow";
+import { TIME_WINDOW_OPTIONS } from "./constants/chartConfig";
 import { useBtcRealtimeChart } from "./hooks/useBtcRealtimeChart";
 
 export default function App() {
   const {
     chartContainerRef,
     chartHostRef,
+    historySnapshotChartContainerRef,
+    historyTimelineWindowSeconds,
+    setHistoryTimelineWindowSeconds,
     connection,
     connectionClass,
     latestPrice,
@@ -27,6 +32,10 @@ export default function App() {
       document.title = "BTC Live Chart";
     }
   }, [latestPrice]);
+
+  const snapshotTimeWindowOptions = TIME_WINDOW_OPTIONS.filter(
+    (option) => option.value !== 24 * 60 * 60
+  );
 
   return (
     <main className="container">
@@ -52,6 +61,12 @@ export default function App() {
         chartContainerRef={chartContainerRef}
         tooltip={tooltip}
         tradingViewSrc=""
+      />
+      <HistorySnapshotChart
+        containerRef={historySnapshotChartContainerRef}
+        selectedWindowSeconds={historyTimelineWindowSeconds}
+        setSelectedWindowSeconds={setHistoryTimelineWindowSeconds}
+        timeWindowOptions={snapshotTimeWindowOptions}
       />
       <HistoryResults items={historyResults} />
       <p id="message">{message}</p>
